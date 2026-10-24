@@ -1,0 +1,655 @@
+# 系统环境与工具栈文档
+
+> 最后更新：2026-10-22（同日卡顿诊断补全 6 条 D→E junction 违规伪装清单、纠正 v33 审计 3.1 节盘符误判，报告 `rest_agent\docs\e_drive_lag_root_cause_20261022.md`；此前固化强制磁盘 I/O 规范与 v33 链路审计结论：活跃 IO 全部 D 盘 SSD，任务级缓存 `D:\AI\hf_cache`，WSL vhdx 落 E 盘待迁移；2026-10-21 曾更新 Ollama 27 模型、Pueue 队列、REST v32 验收）
+> 用途：全面记录当前系统的软硬件环境、已安装工具、共享文件夹结构，供后续学习和开发参考。
+> 核实方式：注册表扫描 + PowerShell实测 + WSL bash实测 + 路径存在性验证 + conda env list + ollama list + 逐环境import torch验证
+
+---
+
+## 一、硬件与系统（实测）
+
+| 项目 | 详情 |
+|------|------|
+| 操作系统 | Windows 10 专业版 64位（Build 19045） |
+| CPU | AMD Ryzen 7 9700X，8核16线程，基准3.8GHz |
+| 主板 | 影驰（Galax）UNION B650M Wi-Fi PLUS |
+| 内存 | 16GB DDR5，标称4800MHz，实际运行6000MHz |
+| GPU（独显） | NVIDIA GeForce RTX 5060 Ti，8GB显存，驱动591.86 |
+| GPU（核显） | AMD Radeon Graphics（CPU集成） |
+| GPU（虚拟） | OrayIddDriver Device（向日葵虚拟显卡） |
+| 系统盘（SSD） | WD Green SN3000 1TB NVMe SSD，分 C:（系统 200GB，剩 93.6GB）+ D:（731GB 高速工作区，剩 236.8GB） |
+| 数据盘（HDD） | WDC WD4003FRYZ 4TB SATA 机械硬盘，整盘映射 E:（3726GB；2026-10-22 诊断时刻剩约 398.1GB），仅放最终成品/历史版本/冷数据/归档备份 |
+| **IO 分工规则（强制，2026-10-22 审计固化，同日卡顿诊断补全 junction 清单）** | 训练、合并、转换、量化、checkpoint、活跃数据集、临时文件、高频缓存**一律 D 盘 SSD**；E 盘 HDD 只做成品/历史/冷数据/归档；C 盘只留系统。任务级缓存目录 `D:\AI\hf_cache`（hub/datasets/torch/tmp 四子目录）；模型工程脚本必须在 import torch/transformers 前显式设置 `HF_HOME/HF_HUB_CACHE/HF_DATASETS_CACHE/TRANSFORMERS_CACHE/TORCH_HOME/TMP/TEMP/TMPDIR` 指向 D 盘，禁止继承用户级 E 盘变量。禁止软链接伪装 D 盘实际写 E 盘。**2026-10-22 实测确认以下 D 盘路径是 junction、物理落在 E 盘机械盘（违规伪装，路径在 D 不等于物理走固态，排查 IO 先 `fsutil reparsepoint query` / `Get-Item.LinkType` 核实落点）：** ① `D:\AI\models` → `E:\AI_Moved\AI\models`（39.22GB，基座读）；② `D:\AI\AI_Study\llamafactory_workspace\checkpoints` → E:\AI_Moved 同名（28.00GB，训练高频写）；③ `...\merged` → E（118.72GB，合并读写）；④ `...\gguf` → E（128.41GB，GGUF 转换读写）；⑤ `...\export` → E（85.69GB，OPV 历史归档）；⑥ `D:\YDW\DouBao_ComfyUI\models` → `E:\YDW\ComfyUI_models\models`（105.42GB，Comfy 模型读）。真实落 D SSD 的合规目录：`D:\AI\hf_cache`、训练 `data`、`llama.cpp`、`unsloth_compiled_cache`。机械盘"活动率 100%"是寻道排队忙满、不等于容量写满；判据看队列长度（HDD 健康 1~2 以内）、响应延迟与真实吞吐，空闲期 30 秒实测队列 0、延迟 0ms、1.0 次/秒、写 5.3KB/s。卡顿根因诊断报告：`E:\YDW\REST\rest_agent\docs\e_drive_lag_root_cause_20261022.md`；002 降载方案见 `E:\YDW\VScode_Project\002\docs\24-机械盘IO降载方案-20261022.md`；REST 链路审计见 `E:\YDW\REST\rest_agent\docs\v33_disk_io_audit_20261022.md`（注：该审计 3.1 节按盘符判 PASS 有误，checkpoints/merged/gguf/models 物理落点以卡顿诊断报告第 4 节纠正表为准） |
+| WSL | Ubuntu（WSL2），GPU可见；**实测 vhdx 在 `E:\WSL\Ubuntu\ext4.vhdx`（78.73GB，落 HDD，违规待迁 D 盘 SSD）**；迁移完成前禁止在 WSL 内跑重度模型工程任务，本项目训练一律走 Windows `rest-v33` 环境 |
+
+**8GB显存能做什么**：阶段0-3完全无压力；阶段4可跑1B-8B模型推理、3B-7B模型的LoRA微调；阶段5 Agent开发完全够用。
+
+---
+
+## 二、代码编辑器与 IDE（实测路径）
+
+| 工具 | 版本 | 安装路径 | 说明 |
+|------|------|----------|------|
+| Visual Studio Code | User安装版 | `D:\Microsoft VS Code\Code.exe` | 主力编辑器，code在PATH中 |
+| Visual Studio Community | 2026 | 注册表安装 | MSVC 14.51、CMake、Ninja、Windows SDK 10.0.26100 |
+| Trae CN | User安装版 | `D:\Trae CN\` | 字节跳动AI IDE |
+| TraeWork CN | User安装版 | `D:\TRAE SOLO CN\` | Trae独立版 |
+| Qt | 6.11.1 | `D:\Qt\6.11.1\mingw_64\` | Qt + MinGW 13.1 |
+| Notepad-- | 3.8.3 | `D:\Notepad--v3.8.3-win10-portable\` | 轻量文本编辑器（便携版） |
+| UltraEdit | — | `D:\UltraEdit\` | 专业文本编辑器 |
+
+**VS Code已安装扩展**：Python、Pylance、Python Envs、Debugpy、WSL远程、Ollama、CMake、中文语言包、GLM、DeepSeek。
+
+---
+
+## 三、Windows Python 与 AI 环境（实测）
+
+### Conda（Miniconda3 py313_26.3.2-2）
+
+- **安装路径**：`D:\YDW\Trae_Gromacs\miniconda3`
+- **conda版本**：26.3.2
+- **共3个环境**：base、rest-train、rest-win
+
+#### 环境1：base（通用AI环境）
+
+- **Python**：3.13.13
+- **路径**：`D:\YDW\Trae_Gromacs\miniconda3\python.exe`
+- **注意**：运行Python脚本必须用此完整路径，系统默认python无numpy
+
+| 类别 | 包 | 版本 |
+|------|-----|------|
+| 深度学习 | torch / torchvision / torchaudio | 2.13.0+cu130 / 0.28 / 2.11 |
+| 科学计算 | numpy / pandas / matplotlib | 2.5.2 / 2.3.3 / 3.10.8 |
+| 经典ML | scikit-learn | 1.9.0 |
+| 大模型 | transformers / datasets / peft / accelerate | 5.5.0 / 4.0.0 / 0.18.1 / 1.11.0 |
+| 嵌入 | sentence-transformers | 5.6.1 |
+| Agent | langchain / langchain-community / langchain-core | 1.3.14 / 0.4.2 / 1.5.1 |
+| 化学 | rdkit | 2025.03.6 |
+| 量化/微调 | torchao / bitsandbytes / trl / unsloth | 0.10.0 / 0.50.2 / 1.14.1 / 2026.9.7 |
+| 笔记本 | jupyter / ipykernel | 未安装 / 未安装 |
+
+#### 环境2：rest-train（REST项目训练环境）
+
+- **路径**：`D:\YDW\Trae_Gromacs\miniconda3\envs\rest-train\`
+- **Python**：3.11.16
+- **核心包**：torch 2.11.0+cu128（cuda可用）、transformers 5.5.0、datasets 4.3.0、peft 0.21.0、accelerate 1.15.0
+- **微调工具**：bitsandbytes 0.50.2、trl 0.24.0、unsloth 2026.9.7、torchao 0.18.0
+- **其他**：numpy 2.4.6、pandas 3.0.6
+- **未安装**：scikit-learn、sentence-transformers
+
+#### 环境3：rest-win（REST项目Windows环境）
+
+- **路径**：`D:\YDW\Trae_Gromacs\miniconda3\envs\rest-win\`
+- **Python**：3.11.16
+- **说明**：无torch，用于轻量脚本
+
+### 独立Python
+
+- **Python 3.12.10 (64-bit)**：`C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe`
+- **Python 3.2**：注册表中有记录（可能是某软件自带的嵌入式Python，未找到独立安装路径）
+- **py launcher**：`C:\Users\Administrator\AppData\Local\Programs\Python\Launcher\py.exe`（在PATH中）
+
+### 其他语言环境
+
+| 语言 | 版本 | 路径 | 说明 |
+|------|------|------|------|
+| Node.js | 24.19.0 | `D:\nodejs\` | npm 11.17.0；**注意**：PATH中node被豆包沙箱的v22.23.2覆盖，用完整路径调用 |
+| Julia | 1.12.6 | `D:\Julia-1.12.6\` | 不在PATH中（D:\Julia_Depot\bin在PATH） |
+| Perl | — | conda自带 | `D:\YDW\Trae_Gromacs\miniconda3\Library\usr\bin\perl.exe` |
+| Java | 未安装 | — | — |
+| R | 未安装 | — | — |
+| Go | 未安装 | — | — |
+| Rust | 未安装 | — | — |
+| Ruby | 未安装 | — | — |
+| PHP | 未安装 | — | — |
+
+### Docker
+
+- **未安装**（Windows和WSL均无docker）
+
+### CUDA 工具链
+
+- **CUDA Toolkit 13.3**：`D:\NVIDIA_CUDA_Toolkit\`，nvcc在PATH中
+- **Nsight Compute**：2026.2.1
+- **Nsight Systems**：2026.1.3
+- **NVIDIA驱动**：591.86
+
+---
+
+## 四、WSL Ubuntu 完整环境（实测）
+
+WSL里有 **2套conda发行版、5个conda环境（2个base+3个命名）、编译好的CP2K、独立CUDA Toolkit 12.4**。
+
+### 基本信息
+
+- **发行版**：Ubuntu（WSL2）
+- **状态**：正在运行
+- **GPU**：可见，RTX 5060 Ti 8151MiB
+- **系统Python**：3.14.4
+
+### Conda发行版
+
+| 发行版 | 路径 | 大小 |
+|--------|------|------|
+| miniconda3 | `~/miniconda3` | 13 GB |
+| miniforge3 | `~/miniforge3` | 9.9 GB |
+
+### 五个conda环境
+
+| 环境 | 所属发行版 | Python | 用途 |
+|------|-----------|--------|------|
+| base | miniconda3 | **3.14.7** | 基础环境（无torch） |
+| pytorch | miniconda3 | 3.11.16 | 通用PyTorch环境（torch 2.11.0+cu128，**GPU可用，支持RTX50**，cudnn 91900） |
+| base | miniforge3 | **3.14.7** | 基础环境（无torch） |
+| rest-py311 | miniforge3 | 3.11.16 | 几何优化环境（geometric 1.1.1，无torch） |
+| rest-train | miniforge3 | 3.11.16 | WSL GPU训练环境（cu128支持RTX50，cudnn 91900，带unsloth+trl+bitsandbytes） |
+
+#### WSL rest-train环境详细（重点）
+
+- Python 3.11.16，PyTorch 2.11.0+cu128，transformers 5.5.0，datasets 4.3.0
+- **bitsandbytes 0.50.2**，torchao 0.18.0，pandas 3.0.6
+- **unsloth 2026.9.7 + unsloth_zoo 2026.9.6（自带！）+ trl 0.24.0 + peft 0.21.0**
+- 用途：REST项目模型训练与微调、coding-agent项目SFT（4bit QLoRA，实测6-9s/step）
+
+### ⚠️ GPU训练环境说明（2026-10-05实测修正）
+
+**Windows下有2个环境支持GPU训练（实测cuda.is_available()=True）：**
+- **base**：torch 2.13.0+cu130，cuda可用，RTX 5060 Ti（通用AI环境，包最全）
+- **rest-train**：torch 2.11.0+cu128，cuda可用，RTX 5060 Ti（REST项目训练环境）
+- rest-win：无torch
+
+**WSL下有2个环境支持GPU训练（实测cuda.is_available()=True）：**
+- **miniconda3/pytorch**：torch 2.11.0+cu128，cuda可用，RTX 5060 Ti（通用PyTorch环境）
+- **miniforge3/rest-train**：cu128，支持RTX50，带unsloth 2026.9.7 + trl 0.24.0 + bitsandbytes 0.50.2（训练专用）
+- miniforge3/rest-py311：无torch（几何优化专用）
+
+**选择建议**：
+- 日常AI学习/推理：Windows base（torch 2.13+cu130，包最全）
+- 模型微调训练：Windows rest-train（torch 2.11+cu128）或 WSL rest-train（带unsloth，QLoRA更方便）
+- WSL通用PyTorch：WSL miniconda3/pytorch（torch 2.11+cu128，GPU可用）
+- 用户的qwen3:8b等模型是在Windows环境下训练完成的
+- 安装可能引起依赖冲突的包（unsloth/trl/torch版本变更）：必须单独新建conda虚拟环境，禁止改动base或既有工作流环境
+
+### ⚠️ llamafactory环境现状（2026-10-21实测）
+
+**没有任何环境同时满足"trl 0.24 + llamafactory已装"：**
+- Windows base：有llamafactory 0.9.6.dev0，但trl=1.14.1太新，import `AutoModelForCausalLMWithValueHead`报错，DISABLE_VERSION_CHECK也无法绕过
+- Windows rest-train：trl=0.24.0正确，有unsloth，但**未安装llamafactory**
+- WSL miniforge3/rest-train：trl=0.24.0正确，有unsloth，但**未安装llamafactory**
+- WSL miniconda3/pytorch：只有torch，无其他训练包
+
+**结论**：要跑llamafactory SFT，需在Windows rest-train或WSL rest-train里`pip install llamafactory`（trl版本匹配，预期兼容）；或继续用unsloth原生API写训练脚本（v32方式）。
+
+### CP2K（已编译）
+
+- **路径**：`~/cp2k-build/`（2.8 GB）
+- **包含**：cp2k、dbcsr、libxc 7.0.0
+- **用途**：第一性原理分子动力学（AIMD）、DFT计算
+
+### WSL CUDA 工具链
+
+- **CUDA Toolkit 12.4**（V12.4.131）——WSL独立安装，与Windows的13.3不同
+- **NVIDIA驱动**：591.86（与Windows共享）
+- **nvcc**：在WSL PATH中
+
+### WSL其他语言与工具
+
+| 工具 | 版本/状态 | 路径 | 说明 |
+|------|----------|------|------|
+| 系统Python | 3.14.4 | `/usr/bin/python3` | WSL系统自带 |
+| npm | 11.17.0 | `/mnt/d/nodejs/npm` | 用的是Windows的nodejs |
+| perl | — | `/usr/bin/perl` | 系统自带 |
+| node | 无WSL本地版 | — | 用Windows的D:\nodejs |
+| Java/R/Julia/Go/Rust/Ruby/PHP | 未安装 | — | — |
+| Docker | 未安装 | — | — |
+| pyenv | 未安装 | — | — |
+
+### 项目venv虚拟环境
+
+- **Windows项目**（E:\YDW、D:\YDW、D:\AI，深度3）：未发现venv/.venv
+- **WSL项目**（~，深度4）：未发现venv/.venv
+- 所有Python环境均通过conda管理
+
+### WSL家目录项目
+
+`calc/`、`compare_opt/`、`compare_real/`、`rest_bench/`、`rest_bench_compare/`、`rest_kb/`、`rest_kb_github/`、`rest_test/`、`cp2k-build/`
+
+---
+
+## 五、大模型工具与模型（实测）
+
+### Ollama
+
+- **客户端版本**：0.34.4
+- **安装路径**：`D:\AI\Ollama\ollama.exe`
+- **模型总数**：27个（2026-10-22 实测 ollama list；REST 11 + Agent 001 6 + OPV 5 + 基座/嵌入 3 + 002 代码 2）
+
+#### REST 领域模型（主力迭代线，11个）
+
+| 模型 | 大小 | 说明 |
+|------|------|------|
+| rest-qwen35:8b-v32 | 5.0 GB | **最新版，已验收（2026-10-20）** |
+| rest-qwen35:8b-v31 | 5.0 GB | — |
+| rest-qwen35:8b-v30 | 5.0 GB | — |
+| rest-qwen35:8b-v29 | 5.0 GB | — |
+| rest-qwen35:8b-v1 | 5.0 GB | 早期 |
+| rest-qwen35:v27 | 4.6 GB | — |
+| rest-qwen35:v26 | 4.6 GB | — |
+| rest-qwen35:v25 | 2.7 GB | 4B 早期 |
+| rest-qwen35:v24 | 2.7 GB | — |
+| rest-qwen35:v23 | 2.7 GB | — |
+| rest-qwen35:v22 | 2.7 GB | — |
+
+#### Agent 轨迹/DPO 模型（6个）
+
+| 模型 | 大小 | 说明 |
+|------|------|------|
+| agent-qwen3-8b-dpo-v9_1:latest | 5.0 GB | DPO 最新 |
+| agent-qwen3-8b-dpo-v9:latest | 5.0 GB | DPO v9 |
+| agent-qwen3-8b-trajectory-v8:latest | 5.0 GB | 轨迹 SFT |
+| agent-qwen3-8b-dpo-v1:latest | 5.0 GB | DPO v1 |
+| agent-qwen3-8b-trajectory-v1:latest | 5.0 GB | 轨迹早期 |
+| agent-qwen3-8b-sft-v1:latest | 5.0 GB | SFT 早期 |
+
+#### 002 代码 Agent 模型（2个，项目 `E:\YDW\VScode_Project\002`）
+
+| 模型 | 大小 | 说明 |
+|------|------|------|
+| coder7b-agent:v1 | 4.7 GB | **2026-10-22 最新主力**（轨迹 SFT checkpoint-1058 合并 → Q4_K_M） |
+| coder7b-sft:v1 | 4.7 GB | 阶段2 旧 sft，回滚/对照基线，未覆盖 |
+
+#### OPV 领域模型（5个）
+
+| 模型 | 大小 | 说明 |
+|------|------|------|
+| opv-qwen3-8b:v52-ck50-q4 | 5.0 GB | **最新 OPV** |
+| opv-qwen3-8b:v50-q4 | 5.0 GB | — |
+| opv-qwen34-4b:v46-q4 | 2.5 GB | 4B 最新 |
+| opv-qwen34-4b:v40-q4 | 2.5 GB | — |
+| opv-qwen34-4b:v15-q4 | 2.5 GB | 早期 |
+
+#### 基座与嵌入模型（5个）
+
+| 模型 | 大小 | 说明 |
+|------|------|------|
+| qwen3:8b | 5.2 GB | 通用基座 |
+| gte-qwen2:7b | 4.7 GB | 通用嵌入 |
+| qwen3-embedding:8b | 4.7 GB | Qwen3 嵌入 |
+
+### 本地模型仓库
+
+- **路径**：`D:\AI\models\`（junction → `E:\AI_Moved\AI\models`，真实物理根在 E 盘机械盘；`E:\AI\models` 为空遗留目录）
+- **内容**：Qwen3-8B（完整safetensors，约15GB）、Qwen2.5-3B-Instruct（5.76GB）、Qwen3.5-4B（8.71GB 平铺 + HF 快照 8.70GB）、laya（0.79GB）。**Qwen3.5-4B 两份已于 2026-10-22 只读去重审计：权重 SHA-256 同源一致，但 tokenizer.json/tokenizer_config.json 体系不等价、平铺版多一套多模态 processor_config，不能去重；归属 REST 早期 4B 基座，002 零引用，待 REST 确认历史脚本现行性后单独验收处置**，明细 `E:\YDW\VScode_Project\002\docs\23-D盘Qwen3.5-4B去重审计结论-20261022.md`。
+- **002 项目模型目录** `E:\YDW\VScode_Project\002\models\`（2026-10-22 清理后 51.37GB）：保留 `modelscope`（原始基座 Qwen2.5-Coder-7B-Instruct）、`merged_coder7b_sft`（回滚备份）、`merged_coder7b_agent`（新合并主力 HF）、`coder7b_agent_q4_k_m.gguf`（本次成品）、`coder7b_sft_q4_k_m.gguf`（旧 sft 对照）；已回收站回收 f16 中间件、下载残片、旧 checkpoint，明细与跨项目建议清单见 `E:\YDW\VScode_Project\002\docs\22-模型资产盘点与废弃清单-20261022.md`。
+
+### 其他AI工具
+
+| 工具 | 路径 | 说明 |
+|------|------|------|
+| llama.cpp | `D:\AI\llama.cpp\` | 本地推理引擎 |
+| ComfyUI | `E:\ComfyUI\` | 节点式AI图像生成工作流 |
+| pyvideotrans | `D:\pyvideotrans\` | 视频翻译工具 |
+
+---
+
+## 六、计算化学软件（全面清单，实测路径）
+
+### 量子化学
+
+| 软件 | 版本 | 安装路径 | 可执行文件 |
+|------|------|----------|-----------|
+| Gaussian | 16W Rev A.03 | `D:\G16W\` | `D:\G16W\g16.exe` |
+| GaussView | 6.0.16 | `D:\GV6_WIN-64\` | Gaussian配套可视化 |
+| ORCA | 6.1.1 | `E:\ORCA\software\ORCA6.1.1\` | `orca.exe` |
+| CP2K | 已编译 | WSL `~/cp2k-build/` | AIMD/DFT |
+
+### 分子动力学
+
+| 软件 | 版本 | 安装路径 | 说明 |
+|------|------|----------|------|
+| GROMACS | 2026.3 | `D:\YDW\Trae_Gromacs\gromacs\gromacs-2026.3-AVX512-CUDA-sm120-final2\bin\` | CUDA版，gmx在PATH中 |
+| GROMACS + PLUMED | 2026.3 | 同上目录下PLUMED版 | 含增强采样 |
+| GROMACS（旧版） | 2025.1 | 同上目录 | 旧版 |
+| LAMMPS | 22Jul2025 | `D:\YDW\LAMMPS 64-bit 22Jul2025 with GUI\` | 含GUI，lmp在PATH中 |
+| Packmol | — | `E:\Packmol\` | 分子装箱（MD前处理） |
+
+### 波函数分析与可视化
+
+| 软件 | 版本 | 安装路径 | 说明 |
+|------|------|----------|------|
+| Multiwfn | 3.8 | `D:\Multiwfn\` | `Multiwfn.exe` |
+| VMD | 1.9.3 | `D:\VMD\` | `vmd.exe`，在PATH中 |
+| VESTA | — | `D:\VESTA-win64\` | 晶体结构可视化 |
+| PyMOL | — | `E:\PyMOL\` | 分子可视化 |
+| UCSF ChimeraX | — | `E:\ChimeraX\` | 分子可视化 |
+| Avogadro2 | 2.0.0 | `E:\Avogadro\Avogadro2\` | 分子建模 |
+| GaussSum | 2.2.5 | `E:\GaussSum-2.2.5\` | Gaussian光谱分析 |
+| Blender | 5.2 | `D:\blender-5.2.0-windows-x64\` | 3D渲染 |
+
+### 化学工具
+
+| 软件 | 版本 | 安装路径 | 说明 |
+|------|------|----------|------|
+| ChemDraw/ChemOffice | 2020 | `D:\ChemdrawV20\` | PerkinElmer ChemOffice Suite 2020 |
+| ChemDraw数据 | — | `D:\ChemdrawData\` | ChemDraw for Excel等 |
+| OpenBabel | — | `E:\openbabel-install-msvc\bin\` | 化学格式转换（`obabel.exe`） |
+| OpenBabel（另两份） | — | `E:\openbabel-install\`、`E:\openbabel-openbabel-3-2-1\` | 其他版本 |
+| Sobtop | 2026.1.16 | `D:\sobtop_2026.1.16\` | GROMACS拓扑生成（主用） |
+| Sobtop（另一份） | — | `E:\sobtop\` | 备用 |
+| GeomeTRIC | 1.1.1 | WSL `rest-py311`环境 | 外部几何优化器 |
+| COMSOL Multiphysics | 6.3 | `D:\COMSOL63\` | 多物理场仿真 |
+
+### 编译与其他工具
+
+| 工具 | 版本 | 路径 |
+|------|------|------|
+| MSVC | 14.51 | Visual Studio 2026 |
+| MinGW | 13.1 | Qt 6.11.1自带 |
+| CMake / Ninja | — | Visual Studio 2026 |
+| Git | — | `C:\Program Files\Git\`（PATH中为conda版） |
+| Microsoft MPI | 10.1.12498.52 | `D:\Microsoft_MPI\` |
+| Julia | 1.12.6 | `D:\Julia-1.12.6\` |
+| Node.js | 24.19.0 | `D:\nodejs\` |
+| poppler | 26.02.0 | `D:\poppler-26.02.0\`（PDF处理） |
+| Everything | 1.4.1.1032 | `D:\Everything\`（文件搜索） |
+| IrfanView | 4.75 | 注册表安装（图像查看/批处理） |
+| DownKyi | 1.0.32 | `D:\DownKyi-1.0.32-1.win-x64\`（B站下载） |
+| Origin | 2026b | `D:\Origin2026b\`（科学绘图） |
+| ffmpeg | — | PATH中：`D:\FlyingMouse Format\resources\ffmpeg\ffmpeg.exe` |
+| QtGrace | — | 绘图工具 |
+| Tuba_tool | — | `E:\Tuba_tool\` |
+| h2w | — | `E:\h2w\` |
+
+---
+
+## 七、多媒体与创作工具（实测）
+
+### 视频剪辑与处理
+
+| 工具 | 版本 | 路径 | 说明 |
+|------|------|------|------|
+| DaVinci Resolve | — | `D:\DaVinci\` | 专业视频剪辑/调色 |
+| 剪映专业版 | 11.3 | `D:\JianyingPro\` | 国产视频剪辑 |
+| pyvideotrans | — | `D:\pyvideotrans\` | 视频翻译 |
+| 视频字幕去除器 | 1.4.0 | 注册表安装 | 字幕去除 |
+| PotPlayer | — | `E:\PotPlayer\` | 视频播放器 |
+
+### AI图像生成
+
+| 工具 | 路径 | 说明 |
+|------|------|------|
+| ComfyUI | `E:\ComfyUI\` | 节点式AI图像生成工作流 |
+
+### 截图与图像
+
+| 工具 | 路径 | 说明 |
+|------|------|------|
+| Snipaste | `D:\Snipaste\` | 截图贴图 |
+| IrfanView 4.75 | 注册表安装 | 图像查看/批处理 |
+
+---
+
+## 八、文献管理与笔记（实测）
+
+| 工具 | 版本 | 路径 | 说明 |
+|------|------|------|------|
+| Zotero | — | `D:\Zotero\` | 开源文献管理 |
+| EndNote | 21 | `D:\EndNote21.5\` | 商业文献管理 |
+| Obsidian | — | `D:\Obsidian\` | 笔记软件 |
+| Xmind | 26.4.1341 | `D:\Xmind\` | 思维导图 |
+
+---
+
+## 九、硬件监控与系统工具（实测）
+
+### 硬件检测/监控
+
+| 工具 | 版本 | 路径 | 说明 |
+|------|------|------|------|
+| AIDA64 | — | `E:\AIDA64\` | 全面硬件检测/烤机 |
+| HWiNFO64 | 8.50 | `E:\HWiNFO64\` | 硬件信息/传感器监控 |
+| CPU-Z | 2.20.2 | `E:\CPUID\CPU-Z\` | CPU/主板/内存检测 |
+| GPU-Z | 2.70 | `E:\GPU-Z\` | GPU检测 |
+| CrystalDiskInfo | 9.9.1 | `E:\CrystalDiskInfo\` | 硬盘健康检测 |
+| CrystalDiskMark | 9.0.3 | `E:\CrystalDiskMark9\` | 硬盘速度测试 |
+| Core Temp | 1.20.1 | 注册表安装 | CPU温度监控 |
+| FurMark | 1.39.3 | `E:\FurMark\` | GPU烤机测试 |
+| GamePP | 5.6 | `E:\GamePP\` | 游戏加加（硬件监控） |
+| HDSentinel Pro | — | 注册表安装 | 硬盘哨兵 |
+| DDU | 18.1.6.1 | 注册表安装 | 显卡驱动彻底卸载工具 |
+
+### 系统/通用工具
+
+| 工具 | 版本 | 路径 | 说明 |
+|------|------|------|------|
+| 7-Zip | 24.09 | `C:\Program Files\7-Zip\` | 压缩解压 |
+| WinRAR | 7.13 | 注册表安装 | 压缩解压 |
+| aria2 | 1.37 | WinGet安装（PATH中） | 命令行下载 |
+| Clash Verge（主代理） | mihomo 核心 | `E:\Clash Verge\`（mixed-port 7897） | 2026-10-20 起定为默认代理；外网任务优先用它 |
+| Clash for Windows（备用） | 0.20.39 | `E:\Clash for Windows\` | 仅 Verge 节点不通时备用；切换前先把另一个 off |
+| Pueue | 4.0.4（便携，免安装） | `E:\YDW\Scheduling_System\Pueue\` | Windows 单 GPU 训练串行队列（默认并发1、优先级、依赖、日志），2026-10-20 部署；用法见 `E:\YDW\Scheduling_System\docs\05-使用手册.md` |
+| CC Switch | 3.16 | 注册表安装 | Adobe账号切换 |
+| 向日葵远程控制 | 16.5 | 注册表安装 | 远程控制 |
+| WorkBuddy | 5.3.14 | 注册表安装 | 办公辅助 |
+| 百度网盘 | 8.5.9 | 注册表安装 | 云存储 |
+| Inno Setup | 7.0.1-beta | 注册表安装 | 安装包制作 |
+
+### 通讯/社交/娱乐
+
+微信4.1、QQ、飞书7.75、腾讯会议3.43、网易云音乐3.1、Steam、WeGame、三角洲行动
+
+---
+
+## 十、共享文件夹（共6个 + 本项目）
+
+### 1. `D:\YDW\OSC` — 科研主目录
+
+books（深度学习+化学教材）、**文献分类库（12类约1100篇）**、Obsidian-Vault、有机太阳能电池、毕业论文、开题、基础知识/基础能力、Literature-Pipeline、文献索引/RAG知识库、SI_MD_papers、大量Python自动化脚本
+
+### 2. `D:\YDW\OSC\文献分类库` — OPV文献分类库
+
+| 分类 | 文件数 | 大小 |
+|------|--------|------|
+| 01_综述与展望 | 97 | 962 MB |
+| 02_三元与多组分 | 107 | 425 MB |
+| 03_形貌与结晶 | 197 | 796 MB |
+| 04_稳定性与老化 | 69 | 374 MB |
+| 05_界面与传输层 | 93 | 394 MB |
+| 06_材料与分子设计 | 202 | 904 MB |
+| 07_理论计算与模拟 | 78 | 308 MB |
+| 08_加工与器件工程 | 84 | 313 MB |
+| **09_机器学习** | **72** | **333 MB** |
+| 10_能量损失 | 4 | 17 MB |
+| 11_高效器件 | 30 | 138 MB |
+| 12_其他_未分类 | 75 | 330 MB |
+
+### 3. `E:\YDW\AI_MathModel` — 数学建模比赛
+
+data/E题数据（1.8GB）、src、paper、ckpt/results/figs、docs、submission
+
+### 4. `D:\AI` — AI学习与开发
+
+Ollama、models（Qwen3-8B等）、llama.cpp、AI_Study/AI_Learning、AI_wenxian、文献索引/RAG、大量Agent开发/SFT/微调文档
+
+### 5. `E:\YDW\REST` — REST项目（分子构型优化）
+
+rest_agent、HGT-MI-main（异构图神经网络+互信息）、knowledge_base、model_archive、bonsai、GeomeTRIC日志（60个）、docs/work/test
+
+### 6. `E:\YDW\Trae_Sob` — Sobko/MCP项目
+
+Sobko_MCP_project（两份）、project_docs、Gaussian基组/赝势技术文档、ydw-DIO_B3LYP.gjf
+
+### 7. `E:\YDW\AI_Study` — 本项目
+
+```
+├── AI学习路线手册.html / .md
+├── books/（3本免费教材）
+├── study/stage0_linear_algebra/（线性代数学习计划+10个练习脚本）
+├── docs/（工作流文档，含本文档）
+└── backup/
+```
+
+### 8. `E:\YDW\ChemDatas\gaussian-dsh-plugin` — Gaussian DSH 插件（v0.2.0）
+
+DeepSeek Harness（DSH/Cordis）桌面端 Gaussian 计算辅助插件：FastAPI 后端（24 个 Python 模块，严格串行 lease、PID 三态实例校验、GJF/输出解析、Multiwfn/VMD 后处理）+ Cordis 前端（src/index.js 18 个工具注册、src/client.js 状态卡）。后端 onedir 运行时在 `runtimes/win32-x64/gaussian-backend/`；文档在 `docs/`（架构、状态、计划、验收报告、经验教训、修复报告）；交付包 `acceptance_bundle.zip`。配套通用技能 `dsh-plugin-toolkit`（见工具表）。Gaussian 工作目录 `E:\YDW\ChemDatas\Gjf`，后端数据目录 `C:\Users\Administrator\.gaussian-dsh\`。当前状态：R1–R13 后端/装载闭环；R14 补齐 18 个工具 output `{schema, render, presentationMeta?}` 契约、离线自测 18/18 PASS、bundles 重新登记；R14c 系统提示工具列表从 13 补齐到 18 个、README 环境变量表与安装流程对齐实读集合；**R15（2026-10-22）** 状态卡从浏览器直连后端 8765 改为 host `connection.fetch.register` 同源代理（`GET /api/gaussian/status`、`POST /api/gaussian/retry`，renderer 走相对路径、不再跨域直连），host snapshot 透传 state/version/owned/ready/error 与后端摘要；修掉 `runtime.json` UTF-8 BOM 导致 Node `JSON.parse` 失败、包内 exe 自定位被吞成 null 的离线缺陷（解析前剥 BOM、manifest 校验 target/version/sha256）；离线 shape/profile bundle/18 工具契约/toolkit manifest 四项全 PASS；发布工程实测：onedir exe 在独立端口 8799 实跑 health 7s 就绪、capabilities 三工具探测存在、带 token 受控退出（smoke_test_backend.ps1 PASS），离线 TestClient 回归 6/6 PASS（health/status/capabilities/匿名 403/非法 GJF 拒绝/jobs 列表），后端 compileall 0 错；交付包 51 条目 leak=0、verifier 必含条目命中。**2026-10-22 完全退出重启 DSH 实机确认**：managed spawn→ready 与状态卡同源渲染链路 PASS——卡片「可用」、版本 0.2.0、后端 127.0.0.1:8765、数据目录、Gaussian 路径/可用、工作目录、默认内存 12GB/核数 8、Sobko bm25_only、运行中任务「否」、重试按钮齐全，bundles 未被摘除。剩余 NOT RUN：external reuse、controlled dispose、orphan/dispose race、对话内 18 工具实际调用、retry 实机触发、Multiwfn/VMD 端到端化学链。
+
+---
+
+## 十一、推荐技术栈
+
+### AI学习主线（Windows conda base）
+
+```
+编辑器：VS Code（已有）
+笔记本：VS Code内置Jupyter（需pip install jupyter）
+版本控制：Git（已有）
+环境管理：Conda（已有，3个环境）
+
+阶段0-1：NumPy + pandas + matplotlib + scikit-learn（已有）
+阶段2：PyTorch + torchvision（已有）
+阶段3：PyTorch手写Transformer（已有）
+阶段4：Transformers + Datasets + PEFT + Accelerate（已有）
+阶段5：LangChain + sentence-transformers + Ollama（已有）
+化学结合：RDKit（已有）+ PyTorch Geometric（后续装）
+```
+
+### 计算化学主线
+
+Gaussian 16 / ORCA 6.1.1（已有）→ Multiwfn 3.8（已有）→ GROMACS 2026.3 CUDA / LAMMPS（已有）→ GeomeTRIC（WSL）→ VMD / VESTA / ChemDraw / OpenBabel / Sobtop / GaussView / Avogadro2 / PyMOL / ChimeraX（全部已有）
+
+### 大模型与Agent
+
+Ollama + qwen3:8b（本地推理）→ PEFT + Transformers（微调，Windows rest-train或WSL rest-train带unsloth）→ LangChain（Agent）→ sentence-transformers（嵌入）
+
+### WSL适用场景
+
+CP2K计算、GeomeTRIC几何优化、模型训练（bitsandbytes+unsloth更稳定）、Linux专属工具、bash自动化
+
+---
+
+## 十二、环境使用建议
+
+1. **AI学习用Windows conda base**：Python 3.13.13，所有核心包已装好。
+2. **运行Python脚本**：用 `D:\YDW\Trae_Gromacs\miniconda3\python.exe`，系统默认python无numpy。
+3. **Python 3.13兼容性问题**：建 `conda create -n ai python=3.11`，或用WSL pytorch环境。
+4. **Jupyter**：VS Code中直接建.ipynb，需先 `pip install jupyter`。
+5. **WSL miniconda3**：默认只激活miniforge3，用miniconda3需先 `source ~/miniconda3/etc/profile.d/conda.sh`。
+6. **大模型**：Ollama qwen3:8b可直接本地调用，无需联网API。
+7. **文献**：`D:\YDW\OSC\文献分类库`已分好12类，做RAG直接用。
+8. **禁止安装到C盘**：新软件装D盘或E盘。
+9. **安装可能引起依赖冲突的包**（unsloth/trl/torch版本变更）：必须单独新建conda虚拟环境，禁止改动base或既有工作流环境。
+10. **GPU训练环境**：Windows base（torch 2.13+cu130）和Windows rest-train（torch 2.11+cu128）均支持GPU训练；WSL有2个环境支持GPU——miniconda3/pytorch（torch 2.11+cu128）和miniforge3/rest-train（带unsloth+trl+bitsandbytes）；miniforge3/rest-py311无torch。
+11. **Node.js PATH覆盖**：PATH中`node`指向豆包沙箱的v22.23.2，不是系统D:\nodejs的v24.19.0。需要用系统node时用完整路径 `D:\nodejs\node.exe`，或调整PATH顺序。
+12. **WSL CUDA版本**：WSL有独立的CUDA Toolkit 12.4，与Windows的13.3不同。WSL中编译CUDA代码用nvcc 12.4，但torch用的是自带的cu128运行时。
+13. **所有Python环境均为conda管理**：项目中没有venv/.venv，新建环境统一用 `conda create -n 名称 python=版本`。
+
+---
+
+## 十三、快速查找索引（按用途）
+
+> 做任何项目前先看这张表，避免重复安装/造轮子。
+
+| 我要做什么 | 用什么 | 在哪 |
+|-----------|--------|------|
+| 学数学/ML/DL/Transformer/大模型/Agent | AI学习路线手册 | `E:\YDW\AI_Study\` |
+| 线性代数练习 | 10个Python脚本 | `E:\YDW\AI_Study\study\stage0_linear_algebra\exercises\` |
+| 跑PyTorch（推理/通用） | PyTorch 2.13+cu130 | Windows conda base |
+| 跑PyTorch（GPU训练） | PyTorch 2.11+cu128 | Windows rest-train 或 WSL pytorch/rest-train |
+| 经典机器学习 | scikit-learn 1.9 | Windows conda base |
+| 微调大模型（QLoRA） | unsloth 2026.9.7 + trl 0.24 + PEFT | WSL rest-train（带unsloth）或 Windows rest-train |
+| 跑本地大模型推理 | Ollama 0.34.4 + qwen3:8b | Windows（`D:\AI\Ollama`） |
+| 做Agent开发 | LangChain 1.3.14 + Ollama | Windows conda base |
+| 做RAG（文献问答） | 文献分类库 + sentence-transformers + LangChain | `D:\YDW\OSC\文献分类库` |
+| 嵌入/向量化 | sentence-transformers 5.6 + gte-qwen2:7b | Windows |
+| 化学信息学/分子描述符 | RDKit 2025.03 | Windows conda base |
+| 量子化学计算（DFT等） | Gaussian 16W A.03 或 ORCA 6.1.1 | Windows |
+| Gaussian可视化/建模 | GaussView 6.0.16 | `D:\GV6_WIN-64` |
+| Gaussian光谱分析 | GaussSum 2.2.5 | `E:\GaussSum-2.2.5` |
+| 第一性原理MD（AIMD） | CP2K | WSL `~/cp2k-build/` |
+| 经典分子动力学 | GROMACS 2026.3 CUDA 或 LAMMPS | Windows |
+| 增强采样MD | GROMACS + PLUMED版 | Windows |
+| MD分子装箱 | Packmol | `E:\Packmol` |
+| 波函数分析（轨道/能级/MPP） | Multiwfn 3.8 | `D:\Multiwfn` |
+| 分子几何优化 | GeomeTRIC 1.1.1 | WSL rest-py311 |
+| 分子可视化 | VMD 1.9.3 / VESTA / PyMOL / ChimeraX / Avogadro2 / Blender 5.2 | Windows |
+| 化学结构绘制 | ChemDraw 2020 | `D:\ChemdrawV20` |
+| 化学格式转换 | OpenBabel | `E:\openbabel-install-msvc\bin` |
+| GROMACS拓扑生成 | Sobtop 2026.1.16 | `D:\sobtop_2026.1.16` |
+| 多物理场仿真 | COMSOL Multiphysics 6.3 | `D:\COMSOL63` |
+| 异构图神经网络 | HGT-MI项目代码 | `E:\YDW\REST\HGT-MI-main\` |
+| 分子构型优化Agent | REST项目 | `E:\YDW\REST\` |
+| 文献管理 | Zotero + EndNote 21 | Windows |
+| 笔记/知识管理 | Obsidian | `D:\YDW\OSC\Obsidian-Vault\` |
+| 思维导图 | Xmind 26.4 | Windows |
+| 专业视频剪辑 | DaVinci Resolve / 剪映专业版 11.3 | Windows |
+| AI图像生成 | ComfyUI | `E:\ComfyUI` |
+| 截图贴图 | Snipaste | `D:\Snipaste` |
+| 下载B站视频 | DownKyi 1.0.32 | `D:\DownKyi-1.0.32-1.win-x64` |
+| 科学绘图 | Origin 2026b / matplotlib | Windows |
+| PDF处理 | poppler 26.02 | `D:\poppler-26.02.0` |
+| 文件快速搜索 | Everything 1.4.1 | `D:\Everything` |
+| 图像查看/批处理 | IrfanView 4.75 | Windows |
+| 音视频处理 | ffmpeg | PATH中 |
+| 硬件检测/监控 | AIDA64 / HWiNFO64 / CPU-Z 2.20 / GPU-Z 2.70 | E盘 |
+| 硬盘检测 | CrystalDiskInfo 9.9.1 / CrystalDiskMark 9.0.3 / HDSentinel | E盘 |
+| 远程终端/文件传输 | Xshell 8 / Xftp 8 / 向日葵 | Windows |
+| 代码编辑 | VS Code（含Python/WSL/Ollama扩展） | `D:\Microsoft VS Code` |
+| AI IDE | Trae CN / TraeWork CN | D盘 |
+| C/C++编译 | MSVC 14.51 或 MinGW 13.1 | Windows |
+| 版本控制 | Git | `C:\Program Files\Git` |
+| 代理（主） | Clash Verge / mihomo 7897 | `E:\Clash Verge`（CFW 备用） |
+| 压缩解压 | 7-Zip 24.09 / WinRAR 7.13 | Windows |
+| 命令行下载 | aria2 1.37 | PATH中（WinGet） |
+| 单卡占显存任务串行排队（训练/推理都入队，防挤爆） | Pueue 4.0.4 + 技能 gpu-training-queue + 硬守卫 wait-free-gpu（整卡显存判忙） | `E:\YDW\Scheduling_System\`（手册 docs/05；技能在 .user_skills） |
+| DSH/Cordis 第三方插件安装、开发、排障与发布验收 | 技能 dsh-plugin-toolkit（manifest 离线校验脚本 + 4 个骨架模板 + K1–K12 坑位与排障决策树；含工具 output `{schema, render, presentationMeta?}` 契约、schema 子集、系统提示工具清单一致性检查、host `connection` 同源代理状态卡、runtime.json BOM 与包内 exe 自定位；4.5 节发布分层验收流程：离线契约 → 后端独立端口 smoke → 打包 leak 复核 → 重启 DSH 对照范本，附证据边界纪律） | 技能在 `.user_skills/dsh-plugin-toolkit/`；DSH profile `C:\Users\Administrator\.dsh\profiles\desktop\` |
+| 科学计算语言 | Julia 1.12.6 | `D:\Julia-1.12.6` |
+| JS运行时 | Node.js 24.19.0 | `D:\nodejs` |
+| MPI并行 | Microsoft MPI 10.1 | `D:\Microsoft_MPI` |
+
+---
+
+## 十四、本清单使用说明
+
+### 1. 文档定位
+
+本文档是你的**系统资产总清单**，记录了所有软件、工具、模型、环境、知识库和项目目录。
+
+- **位置**：`E:\YDW\AI_Study\docs\05-系统环境与工具栈.md`
+- **配套文档**：`AI学习路线手册.md`（记录"学什么"），本文档记录"有什么"
+
+### 2. 新任务开始时如何使用
+
+在新任务开始时，直接说：
+
+> "先读取我的系统资产清单：E:\YDW\AI_Study\docs\05-系统环境与工具栈.md，了解我已有的软件、工具、模型和环境，避免重复安装。"
+
+或者更简短：
+
+> "读一下我的系统资产清单再开始。"
+
+### 3. 何时更新本文档
+
+- 安装了新软件/新工具
+- 创建了新的conda环境
+- 下载了新的模型
+- 新建了重要的项目目录或知识库
+- 卸载或删除了重要资源
+
+更新时直接说："更新系统资产清单，新增了XXX"即可。
+
+### 4. 关键环境摘要（已存入长期偏好，每次会话自动注入）
+
+- GPU：RTX 5060 Ti 8GB + AMD核显
+- CPU：AMD Ryzen 7 9700X 8核16线程
+- 内存：16GB DDR5 6000MHz
+- 系统：Windows 10专业版 + WSL Ubuntu（GPU可见）
+- Windows conda：4个环境（base Python 3.13.13 + PyTorch 2.13+cu130 GPU可用 + transformers 5.5 + LangChain + RDKit + trl 1.14.1 + bitsandbytes + llamafactory 0.9.6.dev0（注意：trl 1.14.1与llamafactory要求的0.18-0.24不兼容，import报错）；rest-train Python 3.11.16 torch 2.11+cu128 GPU可用 + trl 0.24.0 + peft 0.21 + bitsandbytes + unsloth 2026.9.7（无llamafactory）；rest-v33 Python 3.11.16 torch 2.11+cu128 GPU可用 + trl 0.24.0 + peft 0.18.1 + accelerate 1.11 + datasets 3.6 + bitsandbytes 0.50.2 + unsloth 2026.9.7 + llamafactory 0.9.5（**标准训练环境，详见06-v33训练环境与规范.md**）；rest-win无torch）
+- Windows独立Python：3.12.10（C:\Users\...\Python312）+ 注册表Python 3.2（软件自带）
+- WSL conda：2套发行版5个环境（miniconda3: base Python3.14.7 + pytorch Python3.11.16 torch2.11+cu128 GPU可用但无transformers/trl/llamafactory；miniforge3: base Python3.14.7 + rest-py311 Python3.11.16无torch + rest-train Python3.11.16 cu128 + trl 0.24.0 + peft 0.21 + bitsandbytes + unsloth 2026.9.7（无llamafactory）GPU可用）+ CP2K + CUDA Toolkit 12.4；WSL共2个GPU可用环境（pytorch裸torch、rest-train带unsloth）
+- WSL系统Python：3.14.4（/usr/bin/python3）
+- 其他语言：Node.js 24.19.0（D:\nodejs，PATH被沙箱v22覆盖需用完整路径）、Julia 1.12.6（D:\Julia-1.12.6）、Perl（conda自带）；Java/R/Go/Rust/Ruby/PHP/Docker均未安装
+- 项目venv：Windows和WSL项目中均未发现venv/.venv，全部通过conda管理
+- 磁盘IO强制规则：D盘NVMe=训练/合并/转换/量化/checkpoint/活跃数据/临时/缓存；E盘HDD=成品/历史/冷数据/归档；C盘=系统。任务级缓存 `D:\AI\hf_cache`；脚本须在 import 模型库前显式锁缓存/临时到 D 盘。2026-10-22 实测 6 条 D 盘 junction 物理落 E 机械盘（违规伪装）：`D:\AI\models`、`...\llamafactory_workspace\checkpoints`、`...\merged`、`...\gguf`、`...\export`、`D:\YDW\DouBao_ComfyUI\models`；路径在 D 不等于物理走固态，排查 IO 先 `fsutil reparsepoint query` / `Get-Item.LinkType` 核实落点。WSL vhdx 现落 E 盘 HDD（78.73GB）待迁 SSD，迁移前不在 WSL 跑重度模型工程。报告：卡顿根因诊断 `E:\YDW\REST\rest_agent\docs\e_drive_lag_root_cause_20261022.md`；REST 链路审计 `E:\YDW\REST\rest_agent\docs\v33_disk_io_audit_20261022.md`（其 3.1 节盘符 PASS 判定以诊断报告纠正表为准）；002 降载方案 `E:\YDW\VScode_Project\002\docs\24-机械盘IO降载方案-20261022.md`
+- 大模型：Ollama 0.34.4，27个模型（2026-10-22 实测；REST v1~v32 共11个 + Agent DPO/轨迹 6个 + OPV 5个 + 基座/嵌入 3个(qwen3:8b、gte-qwen2:7b、qwen3-embedding:8b) + 002 代码 2个(coder7b-agent:v1、coder7b-sft:v1)）
+- 计算化学：Gaussian/ORCA/Multiwfn/GROMACS/LAMMPS/VMD/GaussView/Avogadro2/PyMOL/ChimeraX/COMSOL全套
+- 文献库：D:\YDW\OSC\文献分类库（12类约1100篇OPV文献）

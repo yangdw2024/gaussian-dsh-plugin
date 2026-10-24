@@ -1,0 +1,108 @@
+/**
+ * __PKG_NAME__ — Host 半侧插件（Node 平面）
+ *
+ * 职责：注册面向模型的工具、注入系统提示词片段；需要时托管外部后端进程。
+ * 运行在 DSH Host 进程内；node:fs / node:path 等内置模块打包时标记 external。
+ *
+ * 关键约束（踩坑 K1）：loader 取 module.default 作为插件对象，
+ * 必须把 name / inject / apply 都放进 default 对象；只写 export const inject 会被忽略。
+ */
+
+// 工具 DSL 来自 DSH 工具包（以项目实际依赖为准）：
+// import { defineTool } from "@deepseek-ai/dsh-tools";
+
+/** 工具输出兜底 renderer：把规范 JSON 投影成标准文本块（K8：render 必须是函数）。 */
+const defaultRenderJson = (_args, value) => [{ type: "text", text: JSON.stringify(value) }];
+
+/**
+ * 自包含工具工厂（K8：每个工具都要带 output { schema, render, presentationMeta? }）。
+ * 若项目直接使用 @deepseek-ai/dsh-tools 的 defineTool，按官方 DSL 传 output 即可。
+ * schema 子集：type 仅 object/array/string/number/integer/boolean/null，无 type:"json"；
+ * 不约束输出用空对象 schema: {}；type 与 oneOf 不能并存。
+ */
+function defineTool(options) {
+  return {
+    name: options.name,
+    description: options.description,
+    parameters: options.parameters ?? {},
+    timeoutMs: options.timeoutMs,
+    output: {
+      schema: options.output?.schema ?? {},
+      render: typeof options.output?.render === "function" ? options.output.render : defaultRenderJson,
+      ...(typeof options.output?.presentationMeta === "function"
+        ? { presentationMeta: options.output.presentationMeta } : {}),
+    },
+    execute: options.execute,
+  };
+}
+
+/** 插件内部稳定名（与 cordis.patch.yml 的 id 区分；不要和 client 模块 id 同名，见 K2） */
+const PLUGIN_NAME = "__ENTRY_ID__-host";
+
+/** Host 侧需要等待的服务；tools / systemPrompt / subprocess 均为 Host 服务。 */
+const inject = ["tools", "systemPrompt"];
+
+/**
+ * Cordis 应用入口。框架在 inject 列出的服务就绪后调用，ctx 是服务容器。
+ * @param {import("@deepseek-ai/cordis").Context} ctx
+ * @param {Record<string, unknown>} config 来自 bundle patch / profile patch 合并后的配置
+ */
+function apply(ctx, config = {}) {
+  // ctx.effect 返回的 disposer 在插件卸载时执行；注册工具/监听/提示词都要包在 effect 里。
+  ctx.effect(() => {
+    // ---------- 1. 注册面向模型的工具 ----------
+    // ctx.tools.register(defineTool({ ... }));
+    //
+    // defineTool 要点：
+    // - description 直接进入模型提示词；parameters 用 schema DSL 标注 required；
+    // - output 三要素：schema（受支持子集，不约束用 {}）、render（函数，返回可序列化投影）、
+    //   presentationMeta（可选函数）；缺 output 整 entry 在第一个工具处激活失败（K8）；
+    // - execute(args, exec) 返回规范 JSON；exec.signal 必须遵守；
+    // - 长任务配 run_in_background + ctx.jobs.start(...)；
+    // - 基础设施故障抛异常（框架收敛为 isError），不要返回自然语言让模型解析。
+    //
+    // ctx.tools.register(defineTool({
+    //   name: "example_query",
+    //   description: "一句话说明工具用途。",
+    //   parameters: {
+    //     query: { type: "string", required: true, description: "查询内容" },
+    //   },
+    //   output: {
+    //     schema: { type: "object", properties: { reply: { type: "string" } } },
+    //     render: (_args, value) => [{ type: "text", text: value.reply }],
+    //   },
+    //   async execute(args, exec) {
+    //     return { reply: `echo: ${args.query}` };
+    //   },
+    // }));
+
+    // ---------- 2. 注入系统提示词片段 ----------
+    // section 的 order 决定排列顺序；text 是静态片段，interpolate 可注入动态内容。
+    // 注意：text 里手写的"工具列表"必须和上面 ctx.tools.register 的工具名一一对应；
+    // 漏写某个工具不阻断加载，但模型不知道它存在、不会主动调用（坑位 K9）。
+    ctx.systemPrompt.section({
+      name: "__ENTRY_ID__-guidance",
+      order: 85,
+      text: "这里写本插件对模型的使用约束与说明；工具名清单需与注册工具保持一致。",
+    });
+
+    // ---------- 3.（可选）托管外部后端，对齐 subprocess 契约 ----------
+    // ctx.inject(["subprocess"], (subprocess) => {
+    //   // 3.1 先 probe 已知 baseUrl；成功 = 已有外部后端 → reuse，owned=false，dispose 不关闭它。
+    //   // 3.2 无活后端时按 spec 显式 spawn：argv 不经 shell、cwd 必填字符串、
+    //   //     stdio 显式 ignore/pipe/inherit、graceMs 有限毫秒宽限；env 显式合并，
+    //   //     DSH_* 命名空间会被框架清理，业务变量走 env 条目。
+    //   // 3.3 受控关闭阶梯：应用层 HTTP shutdown → handle.terminate() → handle.waitForExit()；
+    //   //     只有 waitForExit() === true 才清 ownership；未确认退出保留 handle、保持 owned、标 orphan。
+    //   // 3.4 不主动杀业务子进程树；_waitReady 期间被 dispose 直接走受控 stop 分支。
+    // });
+
+    // 返回 disposer：卸载时撤销上面注册的工具、提示词、监听器。
+    return () => {
+      // 框架自动撤销 effect 内注册的工具/提示词；手动资源（网络连接等）在这里释放。
+    };
+  });
+}
+
+// K1：default 对象必须带 name / inject / apply。
+export default { name: PLUGIN_NAME, inject, apply };

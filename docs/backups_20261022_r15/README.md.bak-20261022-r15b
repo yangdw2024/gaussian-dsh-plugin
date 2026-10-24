@@ -1,0 +1,183 @@
+# Gaussian DSH 插件
+
+基于 AIFS 插件架构（@aifs/dsh-plugin-aifs）开发的 Gaussian 计算辅助插件，运行在 DSH（DeepSeek Harness）客户端中。
+
+## 功能
+
+| 工具 | 说明 |
+|------|------|
+| `gaussian_status` | 检查后端服务状态、Gaussian 可执行文件、Sobko 配置、运行中任务 |
+| `generate_gaussian_input` | 生成 Gaussian .gjf 输入文件（自动校验方法基组组合、写入工作目录） |
+| `parse_gaussian_output` | 解析 .log/.out 输出（能量、收敛、HOMO-LUMO、偶极矩、频率、热力学量、用时） |
+| `submit_gaussian_job` | 提交 Gaussian 任务（串行执行，禁止并行） |
+| `get_gaussian_job` | 查询任务实时状态（当前优化步、最新能量、log 尾部） |
+| `list_gaussian_jobs` | 列出历史任务 |
+| `stop_gaussian_job` | 停止运行中任务 |
+| `search_basis_sets` | 搜索 BSE 官方基组库 |
+| `get_basis_set` | 获取基组完整内容（Gaussian94 格式，可嵌入 .gjf） |
+| `search_gaussian_keywords` | 搜索 Gaussian 关键词参考（基于 gaussian.com 官方文档） |
+| `sobko_search` | 检索 Sobko 知识库（思想家公社 + Multiwfn 手册 + OPV 论文） |
+| `sobko_fetch` | 展开 Sobko source/chunk 完整上下文 |
+| `diagnose_gaussian_error` | 错误诊断（内置错误库 + Sobko 解决方案） |
+| `generate_gaussian_input_from_smiles` | RDKit 解析 SMILES → 3D 构象 → Gaussian 输入（盐/多片段/歧义自旋默认拒绝） |
+| `postprocess_capabilities` | 探测本机 Multiwfn/VMD/formchk 是否存在及版本 |
+| `create_postprocess_task` | 创建后处理任务（formchk → Multiwfn cube/轨道 → VMD 渲染） |
+| `get_postprocess_task` | 查询单个后处理任务状态与产物路径 |
+| `list_postprocess_tasks` | 列出历史后处理任务 |
+
+## 架构
+
+```
+DSH 客户端（Cordis 插件）
+  ├── lib/index.js      — Host：工具注册（18个工具）+ 系统提示注入 + 拉起/托管后端
+  │                        connection 同源路由 GET /api/gaussian/status、POST /api/gaussian/retry
+  ├── lib/client.js     — 浏览器 UI 状态页（React 组件），只走 /api/gaussian/* 同源路由，不直连后端端口
+  └── Host Node 内部 HTTP → 127.0.0.1:8765（仅 host 进程连后端，renderer 不跨域直连）
+
+Python FastAPI 后端
+  ├── backend/app.py            — REST API（23个端点，含 admin/shutdown、admin/gc）
+  ├── backend/gaussian_input.py — .gjf 输入生成器
+  ├── backend/gaussian_output.py— .log 输出解析器
+  ├── backend/job_manager.py    — 任务管理（提交/监控/停止，串行队列）
+  ├── backend/basis_set.py       — BSE 基组库客户端
+  ├── backend/sobko_client.py   — Sobko MCP 客户端（stdio 子进程）
+  ├── backend/keywords.py       — Gaussian 关键词参考库
+  └── backend/config.py         — 配置
+```
+
+## 安装与使用
+
+### 1. 启动后端
+
+```bat
+cd E:\YDW\ChemDatas\gaussian-dsh-plugin
+start_backend.bat
+```
+
+或手动：
+```bat
+set PYTHONPATH=E:\YDW\ChemDatas\gaussian-dsh-plugin
+D:\YDW\Trae_Gromacs\miniconda3\python.exe -m backend.app
+```
+
+后端启动后访问 http://127.0.0.1:8765/docs 查看 API 文档。
+
+### 2. 安装 DSH 插件
+
+**前置环境变量**（managed 模式，User 级永久设置，重启 DSH 生效）：
+
+| 变量 | 值 |
+|------|----|
+| `GAUSSIAN_BACKEND_MODE` | `managed` |
+| `GAUSSIAN_BACKEND_EXE` | `E:\YDW\ChemDatas\gaussian-dsh-plugin\runtimes\win32-x64\gaussian-backend\gaussian-backend.exe`（绝对路径） |
+
+**安装步骤**：
+
+1. 在 DSH「插件 → 添加插件」填写插件目录绝对路径：
+   ```
+   E:\YDW\ChemDatas\gaussian-dsh-plugin
+   ```
+2. 确认包名 `@gaussian/dsh-plugin-gaussian` 已写入 profile `dsh.profile.bundles`（DSH 插件管理器添加会自动登记；若是手动编辑 `package.json` 的 `file:` 依赖，需把包名追加进 `dsh.profile.bundles`，否则自带 patch 不进 host loader、状态卡不出现）。
+3. DSH 用 pnpm 复制安装快照（**不是软链**）；之后若改动 `src/`，先 `node scripts/build.mjs` 重打 `lib/`，再把 `lib/index.js`、`lib/client.js` 覆盖到 profile `node_modules\@gaussian\dsh-plugin-gaussian\lib\`。
+4. 完全退出 DSH（托盘退出、进程结束）再启动；启用后插件列表出现「Gaussian 计算助手」状态卡，状态区显示「可用」、版本、后端地址、Gaussian 路径与工作目录等字段。新开一轮对话后，即可调用 18 个工具（工具注册可见性以新对话实测为准；卡片状态与工具注册是两条链路）。
+
+> 排障顺序、离线校验脚本与发布分层验收流程见配套技能 `dsh-plugin-toolkit`（4.5 节）；重启后若卡片消失，先复查 bundles 是否被崩溃恢复批量摘除。
+
+### 3. 使用
+
+在 DSH 对话中提出计算需求，例如：
+- "帮我生成一个水分子 B3LYP/6-31G(d,p) 优化+频率的输入"
+- "解析 E:\YDW\ChemDatas\Log\ITIC_1.out 的结果"
+- "搜索 def2 基组"
+- "查一下 Sobko 知识库里 B3LYP 优化收敛失败的解决方案"
+
+## 配置
+
+环境变量（可选）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `GAUSSIAN_EXE` | `D:\G16W\g16.exe` | Gaussian 可执行文件路径 |
+| `GAUSSIAN_WORK_DIR` | `E:\YDW\ChemDatas\Gjf` | 输入/输出/chk 工作目录 |
+| `GAUSSIAN_DEFAULT_MEM` | `12GB` | 默认内存（不超过物理内存 15GB） |
+| `GAUSSIAN_DEFAULT_NPROC` | `8` | 默认核数 |
+| `GAUSSIAN_BACKEND_HOST` | `127.0.0.1` | 后端监听地址 |
+| `GAUSSIAN_BACKEND_PORT` | `8765` | 后端监听端口 |
+| `GAUSSIAN_DATA_DIR` | `C:\Users\<用户>\.gaussian-dsh` | 任务 JSON / 日志 / 后处理产物目录 |
+| `GAUSSIAN_MANAGED_TOKEN` | 空 | 受控关闭接口 Bearer token；设置后匿名 shutdown 返回 403 |
+| `SOBKO_PROJECT_DIR` | `E:\YDW\Trae_Sob\Sobko_MCP_project-main` | Sobko 知识库项目路径 |
+| `SOBKO_MODE` | `bm25_only` | Sobko 检索模式（bm25_only 轻量 / hybrid 混合） |
+
+## 扩展能力（M1-M6）
+
+- **M1 SMILES 入口**：`/v1/gaussian-inputs/from-smiles`，RDKit 解析→电荷/多重度推断→ETKDG 3D→MMFF94s 构象（盐/多片段/歧义自旋默认拒绝）。
+- **M2/M3 后处理**：formchk→Multiwfn（MO 能级/HOMO-LUMO/ESP/RDG，版本化菜单 profile）→VMD headless 出图；fchk 可直接读轨道信息。
+- **M4 打包**：`scripts/build_backend.ps1`（onedir，可逆绕过 base 的 pathlib backport 元数据）→ `scripts/deploy_runtime.ps1`（产出 `runtimes/win32-x64/gaussian-backend/` + `runtime.json` sha256 清单）。
+- **M5 managed**：DSH 插件自动 spawn/复用后端，卸载只关自己拉起的进程，运行中的 Gaussian 不受热重载影响；后端启动打印 ready record，health 校验 service 名。
+- **M6 加固**：RSS 内存 soft/hard 守卫、artifact TTL 回收（cube 7 天/图与日志 30 天，绝不删 chk/fchk/gjf/json）、原子数与网格点数提前拒绝、Multiwfn 版本 fail-fast、超时整树 kill。
+
+### 打包与前端
+
+```powershell
+# 后端 onedir 打包 + 部署到 runtimes（自动临时改名 pathlib dist-info 并还原）
+.\scripts\build_backend.ps1
+.\scripts\deploy_runtime.ps1
+
+# 前端打包（需 node_modules；无依赖时可用本机 esbuild 二进制直接 bundle）
+node scripts/build.mjs
+```
+
+### 附加配置变量（后端）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `GAUSSIAN_MAX_ATOMS` | `300` | 超原子数预检直接 422，避免大体系 OOM |
+| `POSTPROCESS_MAX_GRID_POINTS` | `16000000` | 后处理网格点数上限 |
+| `MULTIWFN_EXPECTED_VERSION` | `3.8` | Multiwfn 主版本不符 fail-fast |
+| `MULTIWFN_THREADS` | `2` | Multiwfn 工作线程数 |
+| `GC_ON_STARTUP` | `true` | 启动时静默回收过期 artifact |
+| `GC_CUBE_TTL_DAYS` / `GC_IMAGE_TTL_DAYS` / `GC_LOG_TTL_DAYS` | `7` / `30` / `30` | cube / 图片与日志 / 日志回收天数；chk、fchk、gjf、json 不删 |
+| `BACKEND_RSS_SOFT_MB` / `BACKEND_RSS_HARD_MB` | `1024` / `1800` | 后端内存 RSS 软/硬守卫阈值（MB） |
+| `BSE_API_BASE` | `https://www.basissetexchange.org/api` | BSE 基组库接口地址 |
+
+### 前端 managed 模式变量（DSH 插件进程读取，User 级环境变量持久生效）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `GAUSSIAN_BACKEND_MODE` | `managed` | `managed`：DSH 启动插件时按 exe 自动拉起后端、卸载时受控关闭；`external`：只连接已在运行的后端，不拉起也不关闭它 |
+| `GAUSSIAN_BACKEND_EXE` | 空 | managed 模式必填，指向 `runtimes\win32-x64\gaussian-backend\gaussian-backend.exe` 绝对路径 |
+| `GAUSSIAN_BACKEND_URL` | `http://127.0.0.1:8765` | external 模式下后端地址；managed 模式由 spawn 端口决定 |
+| `GAUSSIAN_STARTUP_TIMEOUT_MS` | `30000` | 等待后端 health ready 的毫秒上限 |
+| `GAUSSIAN_SHUTDOWN_TIMEOUT_MS` | `5000` | 受控关闭等待 `waitForExit()` 的毫秒上限；超时保留 handle、标 orphan，不伪造退出 |
+
+## 硬件约束（用户机器）
+
+- CPU: AMD Ryzen 7 9700X（8核16线程）
+- 内存: 15.1 GB
+- Gaussian 16 Rev A.03（D:\G16W）
+- **严禁并行多任务，必须串行**（Gaussian/Multiwfn/VMD/RDKit 重计算由 ChemComputeScheduler 统一互斥）
+
+## 重要提醒
+
+- 大体系（>100原子）不要用 `opt=calcfc`，会内存爆炸
+- 纯 `opt` 无 `freq` 不能确认是极小点，需补 `freq` 验证虚频
+- Sobko 首次调用需加载 BM25 索引（约 1-2 分钟），后续调用快
+- 默认 BM25-only 轻量模式，避免加载 embedding 模型导致内存/显存爆炸
+
+## 数据目录
+
+任务数据库和日志存储在：
+```
+C:\Users\Administrator\.gaussian-dsh\
+├── jobs/          — 任务信息 JSON
+├── logs/          — 后端日志
+└── postprocess/   — 后处理任务/cube/图片（GC 按 TTL 回收）
+```
+
+## 技术栈
+
+- 前端：JavaScript (ESM) + React（DSH 运行时提供）+ esbuild 打包
+- 后端：Python 3.13（base，D盘）+ FastAPI + uvicorn + pydantic + RDKit + psutil；PyInstaller onedir 打包
+- 知识库：Sobko MCP（stdio JSON-RPC 子进程）
+- 基组库：Basis Set Exchange (BSE) REST API
+- 参考架构：@aifs/dsh-plugin-aifs v0.1.19

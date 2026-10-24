@@ -1,0 +1,682 @@
+/**
+ * Gaussian DSH Plugin — Cordis 前端插件
+ *
+ * 基于 AIFS 插件架构（@aifs/dsh-plugin-aifs）开发，辅助 Gaussian 计算：
+ * 输入生成、输出解析、任务管理、BSE 基组获取、Sobko 知识库检索、关键词参考、错误诊断。
+ *
+ * 后端：Python FastAPI（默认 http://127.0.0.1:8765）
+ */
+
+// ============ 后端 HTTP 客户端 ============
+
+const SERVICE_NAME = "gaussian-dsh-backend";
+const SERVICE_VERSION = "0.2.0";
+
+// 插件运行于 DSH 的 Node 主进程，可用 node 内置（打包时标记 external）。
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, resolve as resolvePath } from "node:path";
+import { tmpdir as osTmpdir } from "node:os";
+
+class GaussianClient {
+  /**
+   * @param {string|((signal?: AbortSignal) => Promise<string>|string)} baseUrlResolver
+   *        固定 URL，或异步解析器（managed 模式等后端就绪后返回 baseUrl）
+   */
+  constructor(baseUrlResolver, timeoutMs = 30000, maxResponseBytes = 1048576) {
+    this.resolveBaseUrl = typeof baseUrlResolver === "function"
+      ? baseUrlResolver
+      : async () => String(baseUrlResolver ?? "http://127.0.0.1:8765");
+    this.timeoutMs = timeoutMs;
+    this.maxResponseBytes = maxResponseBytes;
+  }
+
+  async workflow(method, path, body, signal) {
+    const baseUrl = (await this.resolveBaseUrl(signal)).replace(/\/$/, "");
+    const url = `${baseUrl}${path}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    if (signal) signal.addEventListener("abort", () => controller.abort());
+
+    try {
+      const init = {
+        method,
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+      };
+      if (body !== undefined && body !== null) {
+        init.body = JSON.stringify(body);
+      }
+      const response = await fetch(url, init);
+      const text = await response.text();
+      if (text.length > this.maxResponseBytes) {
+        throw new Error(`Gaussian backend response too large: ${text.length} bytes`);
+      }
+      let data;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = { raw: text };
+      }
+      if (!response.ok) {
+        const detail = data?.detail || data?.error || `HTTP ${response.status}`;
+        throw new Error(`Gaussian backend ${method} ${path} failed: ${JSON.stringify(detail)}`);
+      }
+      return data;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  get(path, signal) { return this.workflow("GET", path, undefined, signal); }
+  post(path, body, signal) { return this.workflow("POST", path, body, signal); }
+}
+
+// ============ Managed 后端生命周期 ============
+
+/**
+ * 后端管理器：probe 已有服务 → reuse；managed 模式按需 spawn；
+ * disposer 只关闭自己启动（owned）的进程，绝不杀 reuse 进程和正在运行的 Gaussian 子进程。
+ */
+class BackendManager {
+  constructor(config) {
+    this.config = config;
+    this.owned = false;
+    this.baseUrl = config.baseUrl;
+    this.managedToken = null;
+    this.handle = null;
+    this.state = "idle";   // idle / external / reused / starting / ready / failed / stopped
+    this.error = null;
+    this.startAttempt = null;
+    this.disposed = false; // M11: 卸载终态标志，取消进行中的启动
+  }
+
+  async probe(baseUrl, signal) {
+    try {
+      const resp = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/health`, {
+        signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(3000)]),
+      });
+      if (!resp.ok) return null;
+      const body = await resp.json();
+      // 只认自己的 service 名，避免把端口上的其他进程误当后端
+      if (body && body.ok === true && body.service === SERVICE_NAME) return body;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 返回可用 baseUrl；external 模式直接返回配置 URL。 */
+  async getBaseUrl(signal) {
+    if (this.disposed) throw new Error("插件已卸载，后端生命周期终止");
+    if (this.config.backendMode === "external") return this.config.baseUrl;
+    if (this.state === "ready" && this.baseUrl) return this.baseUrl;
+    if (this.startAttempt) await this.startAttempt;
+    if (this.disposed) throw new Error("等待启动期间插件已卸载");
+    if (this.state === "ready" && this.baseUrl) return this.baseUrl;
+    // 启动未就绪：再探一次（可能用户手动起了后端），失败则抛清晰错误
+    const existing = await this.probe(this.config.baseUrl, signal);
+    if (existing) {
+      this.state = "ready";
+      this.owned = false;
+      return this.config.baseUrl;
+    }
+    throw new Error(
+      `Gaussian 后端不可用（${this.state}）：${this.error || "后端未启动"}。` +
+      `managed 模式请确认 runtimes 目录含 gaussian-backend.exe；` +
+      `或用 external 模式配合 start_backend.bat 手动启动。`
+    );
+  }
+
+  /** 启动（幂等）。subprocessService 来自 ctx.inject(["subprocess"])。 */
+  start(subprocessService) {
+    if (this.disposed) return Promise.resolve();
+    if (this.startAttempt) return this.startAttempt;
+    this.startAttempt = this._launch(subprocessService).finally(() => {
+      this.startAttempt = null;
+    });
+    return this.startAttempt;
+  }
+
+  async _launch(subprocessService) {
+    // M11: 进入启动前先检查卸载标志，避免卸载后又把 owned 置真
+    if (this.disposed) return;
+    if (this.config.backendMode === "external") {
+      this.state = "external";
+      return;
+    }
+    // 已有健康服务 → reuse，owned=false（不关闭别人的进程）
+    const existing = await this.probe(this.config.baseUrl);
+    if (existing) {
+      if (this.disposed) return;
+      this.state = "ready";
+      this.owned = false;
+      this.baseUrl = this.config.baseUrl;
+      return;
+    }
+    // 没有 subprocess 能力或没有 exe：降级为 failed，不崩溃、不杀端口占用
+    if (!subprocessService || typeof subprocessService.spawn !== "function") {
+      this.state = "failed";
+      this.error = "DSH 未提供 subprocess 服务，无法 managed spawn";
+      return;
+    }
+    const exe = this._resolveExecutable();
+    if (!exe) {
+      this.state = "failed";
+      this.error = "未找到 gaussian-backend.exe（runtimes/win32-x64/gaussian-backend/）";
+      return;
+    }
+    let handle;
+    try {
+      this.state = "starting";
+      this.managedToken = this._randomToken();
+      // B4: cwd 是 DSH SpawnSpec 的必需字符串字段，必须始终给一个真实存在的绝对目录，
+      // 拿不到候选时兜底系统临时目录，绝不能省略或传 undefined。
+      const cwd = this._resolveCwd();
+      const spawnSpec = {
+        argv: [exe],
+        env: {
+          GAUSSIAN_MANAGED_TOKEN: this.managedToken,
+          GAUSSIAN_BACKEND_PORT: String(this._port()),
+        },
+        // N1/M12: DSH SubprocessOutputMode 只支持 pipe/inherit/有界 collect，不支持 "ignore"。
+        // 我们用 health 轮询判定就绪，不读 ready record；stdout/stderr 用 inherit 直接挂到
+        // 宿主输出（由 DSH 自身消费），避免未消费管道缓冲满反堵后端日志，也满足枚举契约。
+        stdio: { stdin: "ignore", stdout: "inherit", stderr: "inherit" },
+        cwd,
+        graceMs: 2000,
+      };
+      handle = subprocessService.spawn(spawnSpec);
+      // N7: 一旦 spawn 成功即登记为受管进程（owned），不等 ready——这样启动中/超时/卸载
+      // 都能被 dispose 回收，不留已 spawn 但无人管理的 backend。ready 只改状态不改所有权。
+      this.owned = true;
+      this.handle = handle;
+      await this._waitReady(handle);
+      if (this.disposed) {
+        // M11/N7: 等待就绪期间插件已卸载 → 立即受控清理该进程，不把它留给系统。
+        await this._shutdownHandle(handle);
+        return;
+      }
+      this.baseUrl = this.config.baseUrl;
+      this.state = "ready";
+    } catch (err) {
+      this.state = "failed";
+      this.error = String(err?.message ?? err);
+      await this._controlledStop(handle);
+    }
+  }
+
+  _port() {
+    try { return new URL(this.config.baseUrl).port || 8765; } catch { return 8765; }
+  }
+
+  _randomToken() {
+    if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+    return `managed-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+  }
+
+  _resolveExecutable() {
+    // exe 路径由打包/runtime 约定通过 config.backendExe 注入
+    return this.config.backendExe || null;
+  }
+
+  /** B4: 返回真实存在、可写的绝对工作目录；所有候选失败时兜底系统临时目录，始终是字符串。 */
+  _resolveCwd() {
+    const candidates = [];
+    if (this.config.dataDir) candidates.push(resolvePath(this.config.dataDir));
+    const exe = this._resolveExecutable();
+    if (exe) candidates.push(dirname(resolvePath(exe)));
+    for (const c of candidates) {
+      try {
+        if (!existsSync(c)) mkdirSync(c, { recursive: true });
+        return c;
+      } catch { /* 该候选不可用，试下一个 */ }
+    }
+    // 兜底：系统临时目录必然存在、可写，保证 cwd 永远是合法字符串。
+    try {
+      return osTmpdir();
+    } catch {
+      return process.cwd();
+    }
+  }
+
+  /**
+   * B3: done 是 Promise<SubprocessOutcome>，对象本身恒为 truthy，绝不能写成 `if(handle.done)`。
+   * 这里订阅 done 的 resolve/reject，配合 health 轮询用 Promise.race 协调退出与就绪。
+   */
+  async _waitReady(handle) {
+    const timeoutMs = this.config.startupTimeoutMs ?? 30000;
+    const deadline = Date.now() + timeoutMs;
+    let delay = 500;
+    // 一次性退出信号：done Promise settle 即说明子进程已离开运行态
+    const exited = new Promise((resolve) => {
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; resolve(true); } };
+      handle.done?.then(finish, finish) ?? finish();
+    });
+    while (Date.now() < deadline) {
+      if (this.disposed) throw new Error("启动等待期间插件已卸载");
+      const body = await this.probe(this.config.baseUrl);
+      if (body) return;
+      // 每轮在“退出信号”和“下一次轮询间隔”之间 race，进程提前退出立即报错而非空等到超时
+      const becameExited = await Promise.race([
+        exited,
+        new Promise((r) => setTimeout(() => r(false), delay)),
+      ]);
+      if (becameExited) throw new Error("后端进程在就绪前退出，请查看后端日志");
+      delay = Math.min(delay * 1.5, 3000);
+    }
+    throw new Error(`后端启动超时（${timeoutMs}ms）`);
+  }
+
+  /**
+   * B2/N7: 受控关闭一个自己 spawn 的 backend 句柄。
+   * 优先 POST /v1/admin/shutdown（后端只关 FastAPI/Sobko，保留正在运行的 Gaussian，
+   * 交由下次 reconcile 接管）；只有受控失败/超时才对【backend 句柄本身】兜底 terminate，
+   * 绝不调用进程树 kill。注意：CREATE_NEW_PROCESS_GROUP 不等于脱离 Windows Job Object，
+   * 因此本插件不把"标志位"当作隔离保证，隔离主要依靠受控 shutdown 的语义，而非强杀。
+   *
+   * waitForExit 返回 boolean：必须 === true 才算真退出，false/抛错都要走兜底。
+   */
+  /**
+   * R6/B2: 受控关闭自己 spawn 的 backend 句柄，返回是否【确认退出】。
+   * - 不局限 ready：只要有 baseUrl 就先 probe 探活，在线才发 /v1/admin/shutdown
+   *   （后端只关 FastAPI/Sobko，保留正在运行的 Gaussian，交 reconcile 接管）；
+   * - waitForExit 必须 ===true 才算退出；受控失败才 terminate 兜底；
+   * - R6: 最终仍未确认退出时【保留 handle 引用】并置 orphan，绝不无条件丢弃，
+   *   避免进程失去管理引用（尤其不能保证 Job Object 隔离时）。
+   */
+  async _shutdownHandle(handle) {
+    if (!handle) return true;
+    let exited = false;
+    if (this.baseUrl) {
+      const alive = await this.probe(this.baseUrl).catch(() => null);
+      if (alive) {
+        try {
+          await fetch(`${this.baseUrl}/v1/admin/shutdown`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${this.managedToken || ""}` },
+            signal: AbortSignal.timeout(3000),
+          }).catch(() => {});
+        } catch { /* ignore */ }
+        try {
+          exited = (await handle.waitForExit?.(
+            AbortSignal.timeout(this.config.shutdownTimeoutMs ?? 5000)
+          )) === true;
+        } catch { exited = false; }
+      }
+    }
+    if (!exited) {
+      try { handle.terminate?.(); } catch { /* ignore */ }
+      try {
+        exited = (await handle.waitForExit?.(AbortSignal.timeout(2000))) === true;
+      } catch { exited = false; }
+    }
+    if (exited) {
+      if (this.handle === handle) this.handle = null;
+    } else {
+      // 未确认退出：保留引用，标记 orphan，不丢弃
+      this.state = "orphan";
+    }
+    return exited;
+  }
+
+  /** N7: 受控停止（启动失败/超时路径也调用），真正清理已 spawn 的句柄。 */
+  async _controlledStop(handle) {
+    await this._shutdownHandle(handle ?? this.handle);
+  }
+
+  /** disposer：只关闭 owned（自己 spawn）的后端；reuse 不动；Gaussian 子进程始终保留。 */
+  async dispose() {
+    // M11/N7: 先置卸载标志，使进行中的启动/轮询尽快退出；再等待在途启动 settle，
+    // 避免"启动中卸载 → owned=false → 留下已 spawn 无人管的 backend"。
+    this.disposed = true;
+    try {
+      if (this.startAttempt) await this.startAttempt.catch(() => {});
+    } catch { /* ignore */ }
+    const handle = this.handle;
+    let exited = true;
+    if (this.owned && handle) {
+      this.owned = false;
+      exited = await this._shutdownHandle(handle);
+    }
+    // R6: 仅确认退出才清空引用并置 stopped；未确认退出（orphan）保留 handle，不丢弃。
+    if (exited) {
+      this.handle = null;
+      this.state = "stopped";
+    }
+  }
+}
+
+// ============ 工具定义工厂 ============
+
+function defineTool(options) {
+  if (!options.name) throw new Error("defineTool: name is required");
+  if (!options.description) throw new Error(`defineTool(${options.name}): description is required`);
+  if (typeof options.execute !== "function") throw new Error(`defineTool(${options.name}): execute must be a function`);
+  const timeoutMs = options.timeoutMs ?? 30000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(`defineTool(${options.name}): timeoutMs must be a positive finite number`);
+  }
+  return {
+    name: options.name,
+    description: options.description,
+    parameters: options.parameters ?? {},
+    timeoutMs,
+    execute: options.execute,
+  };
+}
+
+// ============ 系统提示 ============
+
+const GAUSSIAN_GUIDANCE = `## Gaussian 计算助手（gaussian-dsh 插件）
+
+本插件辅助 Gaussian 16 计算，后端运行在本机 http://127.0.0.1:8765。
+
+### 工作流
+1. **生成输入**：用 generate_gaussian_input 生成 .gjf（自动写入工作目录 E:\\YDW\\ChemDatas\\Gjf）。
+2. **提交任务**：用 submit_gaussian_job 提交（自动串行，禁止并行）。
+3. **监控状态**：用 get_gaussian_job 查看进度（当前优化步、最新能量、log 尾部）。
+4. **解析结果**：任务完成后用 parse_gaussian_output 提取能量、HOMO-LUMO、偶极矩、收敛状态等。
+
+### 硬件约束（用户机器）
+- CPU: AMD Ryzen 7 9700X（8核16线程），默认 nprocshared=8
+- 内存: 15.1 GB，默认 mem=12GB
+- Gaussian 16 Rev A.03，路径 D:\\G16W\\g16.exe
+- 严禁并行多任务，必须串行
+
+### 重要提醒
+- 大体系（>100原子）不要用 opt=calcfc，会内存爆炸
+- 纯 opt 无 freq 不能确认是极小点，需补 freq 验证虚频
+- 方法/基组推荐前用 sobko_search 查思想家公社/Multiwfn 知识库证据
+- 基组用 get_basis_set 从 BSE 官方库获取（支持 Gaussian94 格式）
+- 报错用 diagnose_gaussian_error 诊断，结合内置错误库和 Sobko 解决方案
+
+### 工具列表
+gaussian_status, generate_gaussian_input, generate_gaussian_input_from_smiles,
+parse_gaussian_output, submit_gaussian_job, get_gaussian_job, list_gaussian_jobs,
+stop_gaussian_job, search_basis_sets, get_basis_set, search_gaussian_keywords,
+sobko_search, sobko_fetch, diagnose_gaussian_error
+`;
+
+// ============ 工具定义 ============
+
+function buildTools(client) {
+  const tools = [];
+
+  // 1. 服务状态
+  tools.push(defineTool({
+    name: "gaussian_status",
+    description: "检查 Gaussian 插件后端服务状态：Gaussian 可执行文件是否存在、Sobko 知识库配置、工作目录、默认内存/核数、是否有任务在运行。",
+    parameters: {},
+    execute: (_args, exec) => client.get("/v1/status", exec.signal),
+  }));
+
+  // 2. 生成输入
+  tools.push(defineTool({
+    name: "generate_gaussian_input",
+    description: "生成 Gaussian .gjf 输入文件并写入工作目录。需提供分子坐标（[[元素,x,y,z],...]）、电荷、自旋、方法/泛函、基组、任务类型（sp/opt/freq/opt+freq/td/irc/scan）。后端自动校验方法基组组合，返回内容、文件名、保存路径和警告。大体系不要加 calcfc。",
+    parameters: {
+      job_name: { type: "string", description: "任务名（用于文件名）", default: "gaussian_job" },
+      job_type: { type: "string", description: "任务类型：sp, opt, freq, opt+freq, td, irc, scan", default: "opt" },
+      method: { type: "string", description: "方法/泛函，如 B3LYP, wB97XD, M062X, PBE0, CAM-B3LYP, HF, MP2", default: "B3LYP" },
+      basis: { type: "string", description: "基组，如 6-31G(d,p), 6-311+G(d,p), def2-SVP, def2-TZVP, cc-pVDZ", default: "6-31G(d,p)" },
+      charge: { type: "integer", description: "分子电荷", default: 0 },
+      multiplicity: { type: "integer", description: "自旋多重度（闭壳层=1，二重态=2）", default: 1 },
+      atoms: { type: "array", description: "原子坐标 [[元素符号, x, y, z], ...]", items: { type: "array" } },
+      extra_keywords: { type: "array", description: "额外关键词，如 ['scf=tight','empiricaldispersion=gd3bj','int=ultrafine']", items: { type: "string" } },
+      mem: { type: "string", description: "内存，默认 12GB（不要超过物理内存15GB）" },
+      nproc: { type: "integer", description: "核数，默认 8" },
+    },
+    execute: (args, exec) => client.post("/v1/gaussian-inputs", args, exec.signal),
+  }));
+
+  // 3. 解析输出
+  tools.push(defineTool({
+    name: "parse_gaussian_output",
+    description: "解析 Gaussian .log/.out 输出文件，提取：正常结束标志、错误信息、方法基组、电荷自旋、原子数/基函数数、最终能量、优化收敛（驻点/力/位移）、HOMO-LUMO 能级和 gap、偶极矩、频率与虚频、热力学量、CPU/墙钟时间。传 file_path 或 content。",
+    parameters: {
+      file_path: { type: "string", description: "日志文件绝对路径（优先）" },
+      content: { type: "string", description: "日志文本内容（若不传 file_path）" },
+      filename: { type: "string", description: "文件名（用于显示）" },
+    },
+    execute: (args, exec) => client.post("/v1/gaussian-outputs/parse", args, exec.signal),
+  }));
+
+  // 4. 提交任务
+  tools.push(defineTool({
+    name: "submit_gaussian_job",
+    description: "提交 Gaussian 计算任务（串行执行：若已有任务在运行则拒绝）。传入 gjf_content，后端写入工作目录并启动 g16.exe。返回 job_id 和任务信息。提交前用 generate_gaussian_input 生成内容。",
+    parameters: {
+      job_name: { type: "string", description: "任务名", default: "gaussian_job" },
+      gjf_content: { type: "string", description: "完整的 .gjf 文件内容（来自 generate_gaussian_input 的 content 字段）", required: true },
+    },
+    execute: (args, exec) => client.post("/v1/jobs", args, exec.signal),
+  }));
+
+  // 5. 任务状态
+  tools.push(defineTool({
+    name: "get_gaussian_job",
+    description: "获取单个 Gaussian 任务的实时状态：状态（pending/running/completed/failed/stopped）、当前优化步数、最新能量、log 尾部、PID、输入输出路径。用于轮询监控任务进度。",
+    parameters: {
+      job_id: { type: "string", description: "任务 ID（来自 submit_gaussian_job）", required: true },
+      log_tail_lines: { type: "integer", description: "返回 log 尾部行数", default: 30 },
+    },
+    execute: (args, exec) => client.get(`/v1/jobs/${encodeURIComponent(args.job_id)}?log_tail_lines=${args.log_tail_lines ?? 30}`, exec.signal),
+  }));
+
+  // 6. 列出任务
+  tools.push(defineTool({
+    name: "list_gaussian_jobs",
+    description: "列出所有 Gaussian 历史任务（按时间倒序），返回 job_id、名称、状态、时间等。用于重新打开之前的工作。",
+    parameters: {
+      limit: { type: "integer", description: "返回数量", default: 50 },
+    },
+    execute: (args, exec) => client.get(`/v1/jobs?limit=${args.limit ?? 50}`, exec.signal),
+  }));
+
+  // 7. 停止任务
+  tools.push(defineTool({
+    name: "stop_gaussian_job",
+    description: "停止正在运行的 Gaussian 任务（终止进程树，包括 l101.exe 等子进程）。仅对 running 状态任务有效。",
+    parameters: {
+      job_id: { type: "string", description: "任务 ID", required: true },
+    },
+    execute: (args, exec) => client.post(`/v1/jobs/${encodeURIComponent(args.job_id)}/stop`, {}, exec.signal),
+  }));
+
+  // 8. 搜索基组
+  tools.push(defineTool({
+    name: "search_basis_sets",
+    description: "搜索 Basis Set Exchange (BSE) 官方基组库。按名称/描述/族模糊匹配，返回基组名、显示名、族、支持元素、最新版本。BSE 是基组标准来源（basissetexchange.org）。",
+    parameters: {
+      query: { type: "string", description: "搜索关键词，如 def2, cc-pv, 6-31, lanl2", required: true },
+      limit: { type: "integer", description: "返回数量", default: 20 },
+    },
+    execute: (args, exec) => client.get(`/v1/basis-sets?query=${encodeURIComponent(args.query)}&limit=${args.limit ?? 20}`, exec.signal),
+  }));
+
+  // 9. 获取基组
+  tools.push(defineTool({
+    name: "get_basis_set",
+    description: "从 BSE 官方库获取指定基组的完整内容（默认 Gaussian94 格式，可直接嵌入 .gjf 的 gen 段）。需提供基组名（用 search_basis_sets 确认准确名称）和原子序数列表。返回 content 字段为基组文本。",
+    parameters: {
+      name: { type: "string", description: "基组名（BSE 标准名，如 def2-svp, cc-pvdz, 6-31g_st_）", required: true },
+      elements: { type: "string", description: "原子序数逗号分隔，如 6,7,8,16", default: "1,6,7,8" },
+      format: { type: "string", description: "输出格式：gaussian94, gaussian, nwchem, orca, psi4, qchem", default: "gaussian94" },
+    },
+    execute: (args, exec) => client.get(`/v1/basis-sets/${encodeURIComponent(args.name)}?elements=${encodeURIComponent(args.elements)}&fmt=${args.format ?? "gaussian94"}`, exec.signal),
+  }));
+
+  // 10. 关键词搜索
+  tools.push(defineTool({
+    name: "search_gaussian_keywords",
+    description: "搜索 Gaussian 关键词参考库（基于 gaussian.com 官方文档整理）。覆盖：任务类型、方法泛函、SCF 控制、色散校正、积分格点、溶剂模型、布居分析、常见错误与解决方案。返回关键词、说明、用法、注意事项。",
+    parameters: {
+      query: { type: "string", description: "搜索关键词，如 scf, opt, freq, 色散, 溶剂, 收敛失败", required: true },
+    },
+    execute: (args, exec) => client.get(`/v1/keywords?query=${encodeURIComponent(args.query)}`, exec.signal),
+  }));
+
+  // 11. Sobko 检索
+  tools.push(defineTool({
+    name: "sobko_search",
+    description: "检索 Sobko 计算化学知识库（思想家公社学术帖 577篇 + Multiwfn 用户手册 + OPV 有机太阳能电池论文 1108篇）。默认 BM25-only 轻量模式。返回可追溯证据片段（source_id、chunk_id、文本、权威等级）。用于方法选择、错误解决方案、Multiwfn 后处理等的文献证据支持。首次调用需加载索引（约 1-2 分钟）。",
+    parameters: {
+      query: { type: "string", description: "检索问题，如 'B3LYP 优化 收敛失败 解决'、'Multiwfn 静电势 分析'、'OSC 给体 泛函 选择'", required: true },
+      top_k: { type: "integer", description: "返回结果数", default: 8 },
+      software: { type: "array", description: "按软件过滤，如 ['Gaussian','Multiwfn','ORCA']", items: { type: "string" } },
+      authority_at_least: { type: "string", description: "最低权威等级：A（手册）或 B（帖子/论文）" },
+    },
+    execute: (args, exec) => client.post("/v1/sobko/search", args, exec.signal),
+    timeoutMs: 200000,
+  }));
+
+  // 12. Sobko 展开上下文
+  tools.push(defineTool({
+    name: "sobko_fetch",
+    description: "展开 Sobko 知识库中某个 source/chunk 的完整上下文（含相邻 chunk）。用于 sobko_search 返回片段后获取完整内容。",
+    parameters: {
+      chunk_id: { type: "string", description: "chunk ID（来自 sobko_search）" },
+      source_id: { type: "string", description: "source ID（来自 sobko_search）" },
+      expand_prev_next: { type: "integer", description: "展开前后各几个 chunk", default: 1 },
+    },
+    execute: (args, exec) => client.post("/v1/sobko/fetch", args, exec.signal),
+  }));
+
+  // 13. 错误诊断
+  tools.push(defineTool({
+    name: "diagnose_gaussian_error",
+    description: "诊断 Gaussian 计算错误：匹配内置错误库（SCF收敛失败、内存不足、优化失败、基组错误等）+ Sobko 知识库检索解决方案。传入错误文本（从 log 中提取的 Error termination 行或报错关键词）。返回诊断结果和文献证据。",
+    parameters: {
+      error_text: { type: "string", description: "错误文本，如 'Convergence failure'、'Out-of-memory'、'Error termination in l101.exe'", required: true },
+    },
+    execute: (args, exec) => client.post("/v1/diagnose", args, exec.signal),
+    timeoutMs: 200000,
+  }));
+
+  // 14. SMILES → Gaussian 输入
+  tools.push(defineTool({
+    name: "generate_gaussian_input_from_smiles",
+    description: "从 SMILES 字符串自动生成 Gaussian .gjf 输入文件。后端用 RDKit ETKDGv3 生成 24 个构象，MMFF94s 优化后选能量最低构象，自动推断电荷和自旋多重度。适合有机小分子快速起步。注意：盐/多片段体系默认拒绝，过渡金属/多自由基需显式指定 multiplicity。",
+    parameters: {
+      smiles: { type: "string", description: "SMILES 字符串，如 CCO（乙醇）、c1ccccc1（苯）、[NH4+]（铵根）", required: true },
+      num_conformers: { type: "integer", description: "生成构象数（默认 24，范围 1-64）", default: 24 },
+      multiplicity: { type: "integer", description: "自旋多重度（不填则自动推断：闭壳层=1，单自由基=2）", default: null },
+      allow_disconnected: { type: "boolean", description: "是否允许多片段体系（盐/共晶等，默认 false）", default: false },
+    },
+    execute: (args, exec) => client.post("/v1/gaussian-inputs/from-smiles", args, exec.signal),
+    timeoutMs: 60000,
+  }));
+
+  // 15. 后处理能力探测（M3: 让 DSH 工作流能查到 formchk/Multiwfn/VMD 是否就绪）
+  tools.push(defineTool({
+    name: "postprocess_capabilities",
+    description: "检测后处理环境：formchk、Multiwfn、VMD 可执行文件是否存在及 Multiwfn 版本、网格点上限。发起轨道/ESP/RDG/MO能级图任务前先调用。",
+    parameters: {},
+    execute: (_args, exec) => client.get("/v1/postprocess/capabilities", exec.signal),
+  }));
+
+  // 16. 创建后处理任务（M3）
+  tools.push(defineTool({
+    name: "create_postprocess_task",
+    description: "创建后处理任务。kind=orbitals(轨道等值面), esp(静电势表面), rdg(NCI弱相互作用), mo_levels(MO能级图SVG)。输入源三选一：job_id(已有Gaussian任务的chk)、chk_path、fchk_path。注意：orbitals/esp/rdg 在执行器接入前状态为 prepared(仅生成命令)，只有真实产物落盘才会变 completed；mo_levels 直接产出SVG。",
+    parameters: {
+      kind: { type: "string", description: "任务类型：orbitals / esp / rdg / mo_levels", required: true },
+      job_id: { type: "string", description: "已有 Gaussian 任务 ID（从其 chk 后处理）" },
+      chk_path: { type: "string", description: "直接指定 chk 文件路径（自动 formchk）" },
+      fchk_path: { type: "string", description: "直接指定 fchk 文件路径" },
+      orbitals: { type: "array", description: "轨道编号列表（orbitals 用），如 [87,88]", items: { type: "integer" } },
+      orbital_labels: { type: "array", description: "轨道标签 HOMO/LUMO（自动解析为编号）", items: { type: "string" } },
+      grid: { type: "string", description: "网格精度 coarse/medium/fine", default: "medium" },
+      orbital_isovalue: { type: "number", description: "轨道等值面", default: 0.02 },
+      density_isovalue: { type: "number", description: "电子密度等值面", default: 0.001 },
+      render: { type: "boolean", description: "是否用 VMD 渲染图片", default: true },
+    },
+    execute: (args, exec) => client.post("/v1/postprocess/tasks", args, exec.signal),
+    timeoutMs: 120000,
+  }));
+
+  // 17. 查询后处理任务状态（M3: 把任务状态与产物路径映射回工具结果）
+  tools.push(defineTool({
+    name: "get_postprocess_task",
+    description: "按 task_id 查询后处理任务状态（pending/running/prepared/completed/failed）、错误信息与已生成产物路径；prepared 表示命令已生成但产物尚未落地。",
+    parameters: {
+      task_id: { type: "string", description: "后处理任务 ID", required: true },
+    },
+    execute: (args, exec) => client.get(`/v1/postprocess/tasks/${encodeURIComponent(args.task_id)}`, exec.signal),
+  }));
+
+  // 18. 列出后处理任务（M3）
+  tools.push(defineTool({
+    name: "list_postprocess_tasks",
+    description: "列出最近的后处理任务及其状态。",
+    parameters: {
+      limit: { type: "integer", description: "返回条数", default: 50 },
+    },
+    execute: (args, exec) => client.get(`/v1/postprocess/tasks?limit=${args.limit ?? 50}`, exec.signal),
+  }));
+
+  return tools;
+}
+
+// ============ 注册工具 ============
+
+function registerTools(ctx, config, resolveBaseUrl) {
+  // resolveBaseUrl: async (signal) => baseUrl；managed 模式等后端就绪，external 模式直接返回
+  const client = new GaussianClient(
+    resolveBaseUrl || (async () => config?.baseUrl || "http://127.0.0.1:8765"),
+    config?.requestTimeoutMs ?? 30000,
+    config?.maxResponseBytes ?? 1048576,
+  );
+
+  const disposers = [];
+  for (const tool of buildTools(client)) {
+    disposers.push(ctx.tools.register(tool));
+  }
+
+  // 系统提示注入
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: "gaussian:guidance",
+    order: 85,
+    text: GAUSSIAN_GUIDANCE,
+  }));
+
+  return () => { for (const d of disposers) d(); };
+}
+
+// ============ Cordis 插件入口 ============
+
+export const name = "gaussian-dsh";
+
+export function apply(ctx) {
+  const config = {
+    backendMode: process.env.GAUSSIAN_BACKEND_MODE ?? "managed",
+    baseUrl: process.env.GAUSSIAN_BACKEND_URL ?? "http://127.0.0.1:8765",
+    requestTimeoutMs: 30000,
+    maxResponseBytes: 1048576,
+    startupTimeoutMs: Number(process.env.GAUSSIAN_STARTUP_TIMEOUT_MS ?? 30000),
+    shutdownTimeoutMs: Number(process.env.GAUSSIAN_SHUTDOWN_TIMEOUT_MS ?? 5000),
+    backendExe: process.env.GAUSSIAN_BACKEND_EXE || null,
+    dataDir: process.env.GAUSSIAN_DATA_DIR || null,
+  };
+
+  const manager = new BackendManager(config);
+
+  // 工具注册：每次调用时通过 manager 解析 baseUrl（managed 等就绪，external 直连）
+  ctx.effect(() => registerTools(ctx, config, (signal) => manager.getBaseUrl(signal)));
+
+  // managed 生命周期：external 模式直连不 spawn；
+  // managed 模式注入 subprocess 能力启动后端，disposer 只关 owned 进程。
+  if (config.backendMode !== "external") {
+    ctx.inject(["subprocess"], (child) => {
+      child.effect(() => {
+        void manager.start(child.subprocess);
+        return async () => {
+          await manager.dispose();
+        };
+      });
+    });
+  }
+}
+
+export default { name, apply };

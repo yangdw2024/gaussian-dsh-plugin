@@ -1,0 +1,145 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""PyInstaller spec for gaussian-backend.exe
+
+打包后端为单文件 exe，包含：
+- FastAPI + uvicorn
+- RDKit（Chem / Geometry / DataStructs / ForceField）
+- postprocess 模板和 profile
+- 所有 backend 子模块
+
+注意：
+- 必须 workers=1（scheduler 是进程内单例）
+- Sobko 子进程需要 SOBKO_PYTHON_EXE 环境变量指定 Python
+- Gaussian / Multiwfn / VMD 是外部程序，不捆绑
+"""
+from pathlib import Path
+import sys
+
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_delvewheel_libs_directory,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
+
+
+SPEC_DIR = Path(SPECPATH).resolve()
+PROJECT_ROOT = SPEC_DIR.parent
+ENTRYPOINT = PROJECT_ROOT / "backend" / "entrypoint.py"
+
+sys.path.insert(0, str(PROJECT_ROOT))
+
+datas = []
+binaries = []
+hiddenimports = []
+
+# ----- 本地 backend 包 -----
+hiddenimports += collect_submodules(
+    "backend",
+    on_error="raise",
+)
+
+# ----- Uvicorn 动态导入 -----
+hiddenimports += collect_submodules(
+    "uvicorn",
+    on_error="warn once",
+)
+
+# ----- RDKit -----
+for package in (
+    "rdkit.Chem",
+    "rdkit.Geometry",
+    "rdkit.DataStructs",
+    "rdkit.ForceField",
+):
+    hiddenimports += collect_submodules(
+        package,
+        on_error="warn once",
+    )
+
+datas += collect_data_files(
+    "rdkit",
+    include_py_files=False,
+)
+
+binaries += collect_dynamic_libs("rdkit")
+
+# Windows RDKit wheels 可能有 delvewheel .libs 目录
+try:
+    datas, binaries = collect_delvewheel_libs_directory(
+        "rdkit",
+        datas=datas,
+        binaries=binaries,
+    )
+except Exception:
+    # 不是所有 RDKit 安装都用 delvewheel
+    pass
+
+# ----- 包元数据 -----
+for dist in (
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    "pydantic",
+    "requests",
+    "rdkit",
+):
+    try:
+        datas += copy_metadata(dist)
+    except Exception:
+        pass
+
+# ----- 后端运行时资源（模板 + profile） -----
+for src, dest in (
+    (
+        PROJECT_ROOT / "backend" / "postprocess" / "templates",
+        "backend/postprocess/templates",
+    ),
+    (
+        PROJECT_ROOT / "backend" / "postprocess" / "profiles",
+        "backend/postprocess/profiles",
+    ),
+):
+    if src.exists():
+        datas.append((str(src), dest))
+
+hiddenimports = sorted(set(hiddenimports))
+
+a = Analysis(
+    [str(ENTRYPOINT)],
+    pathex=[str(PROJECT_ROOT)],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[
+        "pytest",
+        "matplotlib",
+        "numpy.tests",
+        "pandas",
+    ],
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure)
+
+# 单文件模式：binaries 和 datas 都嵌入 exe
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name="gaussian-backend",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    # 科学计算 DLL + UPX 兼容性风险大，先不用 UPX
+    upx=False,
+    # 保留 stdout/stderr 用于日志重定向
+    # Node managed 模式会用 windowsHide=True
+    console=True,
+)

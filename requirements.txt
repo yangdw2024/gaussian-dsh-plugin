@@ -1,0 +1,10 @@
+# Gaussian DSH Plugin - Python backend dependencies
+# 安装: pip install -r requirements.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0
+psutil>=5.9
+rdkit>=2024.3  # RDKit: conda install -c conda-forge rdkit (PyPI 无官方 wheel)
+requests>=2.31
+# 打包用（可选，仅维护者）:
+# pyinstaller>=6.0

@@ -1,0 +1,37 @@
+{
+  "profile": "multiwfn-3.8",
+  "expected_banner": "Multiwfn",
+  "version_hint": "3.8",
+  "menus": {
+    "real_space_grid": 5,
+    "dos_pdos": 10,
+    "molecular_surface": 12,
+    "weak_interaction": 20,
+    "other_functions_2": 200
+  },
+  "grid_options": {
+    "coarse": 1,
+    "medium": 2,
+    "fine": 3
+  },
+  "real_space_functions": {
+    "electron_density": 1,
+    "total_esp": 12
+  },
+  "orbital_cube": {
+    "other_2_menu": 200,
+    "multi_orbital_submenu": 3,
+    "separate_cube_option": 1,
+    "return_option": 0
+  },
+  "weak_interaction": {
+    "nci_option": 1,
+    "manual_grid_spacing": 4,
+    "default_spacing": 0.15
+  },
+  "notes": [
+    "菜单数字基于 Multiwfn 3.8 官方手册和开发者公开资料",
+    "启动时 probe banner，未知版本 fail-fast",
+    "实际菜单数字可能随版本更新漂移，发现不一致时更新此 profile"
+  ]
+}

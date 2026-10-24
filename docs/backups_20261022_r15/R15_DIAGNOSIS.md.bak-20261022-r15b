@@ -1,0 +1,167 @@
+# R15 诊断与修复规划：状态卡 Failed to fetch（2026-10-22）
+
+> 阶段：Release Engineering 收尾期实机联调。本文件记录根因证据、官方契约核验结论、
+> 最小修复方案、改动清单、离线验证步骤与待实机确认项。不重开此前已静态闭环的状态机问题。
+
+## 1. 现场现象（用户截图，2026-10-22）
+
+- 重启 DSH 后，Gaussian 详情页：标题「Gaussian 计算助手」与描述已渲染（证明 client 半侧
+  激活、bundles 注册、前端 UI 链路通）。
+- 服务状态区卡在「正在读取服务状态…」，红字 `TypeError: Failed to fetch`，按钮「重试连接」。
+- 对照范本 aifs 详情页：服务状态可用、版本 0.1.19、数据目录、启动日志、本机地址、重试按钮。
+- 截图时 8765 端口无监听、无 gaussian-backend 进程（DSH host 未把后端拉起）。
+
+## 2. 已排除项（实机证据，非推测）
+
+1. **后端二进制未损坏**：手动直接启动
+   `runtimes\win32-x64\gaussian-backend\gaussian-backend.exe`，
+   `/v1/health` 返回 `ok=true, service=gaussian-dsh-backend, version=0.2.0`；
+   `/v1/status` 返回 gaussian.exe=`D:\G16W\g16.exe` exists=true、work_dir、data_dir、
+   sobko configured、running_job=false 等完整字段。
+2. **spawnSpec 字段与官方契约一致**（见第 3 节核验），不是字段名不符导致 spawn 抛错。
+3. **前端 entry 已激活**：标题/描述渲染成功，说明 bundles、inject、tool output 契约
+   （R13/R14）链路正常，不在本轮重开。
+4. 手动测试进程 pid 27816（2026-10-22 08:33:11 启动）是诊断用手动拉起进程，**不是
+   DSH host managed 拉起**，不能据此判定 managed 成功。
+
+## 3. 官方契约核验（解包 `E:\DSH\resources\app.asar` 实证）
+
+### 3.1 connection 服务（`@deepseek-ai/dsh-client-connection`）
+
+- `HostConnectionService extends Service`，服务名 `connection`。
+- `this.fetch = { register: (route) => this.registerFetchRoute(owner, route) }`。
+- `registerFetchRoute(owner, route)`：route 形如
+  `{ path, methods: Set, requestBody, fetch }`；同路径重复注册抛错；
+  经 `owner.effect` 注册并返回注销函数。
+- `assertFetchRoute`：path 必须以 `/api` 为前缀；methods 非空、不重复。
+- compose handler 按 `url.pathname` **精确匹配**，`route.methods.has(method)` 后调
+  `route.fetch(request)` 返回 `Response`。
+- host 在 webServer 注册 `/api` 总路由与 `/connect`；renderer 用相对路径 `/api/xxx`
+  经同源 webServer 分发到插件注册的精确路由，**无跨域**。
+
+### 3.2 subprocess 服务（`@deepseek-ai/dsh-subprocess` / `dsh-subprocess-local`）
+
+- 抽象 `SubprocessRuntime extends Service`，服务名 `subprocess`；子类实现 `spawn`。
+- `validateSubprocessSpec(spec)`：只校验 `graceMs` 正有限且不超上限、`signal` 未中止、
+  `argv[0]` 非空。不校验 cwd 字面量形态。
+- `targetEnvironment(spec)`：校验 argv/cwd/env 无 null 字节；`childEnv(extra)` 在
+  Windows 上把父环境与 extra 按大小写归一合并；`scrubbedParentEnv()` 会剔除
+  `KEY|PASSWORD|SECRET|TOKEN` 与 `DSH_*`，但**显式 spec.env 在 scrub 之后合并，显式传入
+  的同名字段保留**。
+- `runnerStdio(spec, ipc, stdinCarrier)`：`stdin==="ignore"→ignore`；
+  `stdout==="inherit"→inherit` 否则 pipe；stderr 同理。我们的
+  `stdio:{stdin:"ignore",stdout:"inherit",stderr:"inherit"}` **合法**。
+- Windows 经 runner Job 对象拉起 `spec.argv`，`cwd: spec.cwd`，`env: targetEnv`；
+  handle 提供 `waitForExit(signal?)`（必须 `===true` 才认退出）与 `terminate()`。
+
+### 3.3 aifs 范本架构（已在本机实测可用）
+
+- host 侧：`ctx.inject(["connection"], child => child.effect(() =>
+  registerStatusRoutes(child.connection, status, async () => { await runtime?.start(); })))`。
+- `registerStatusRoutes`：`connection.fetch.register({ path:"/api/aifs/status",
+  methods:["GET"], requestBody:"buffered", fetch: async () => Response.json(status()) })`，
+  另注册 `POST /api/aifs/retry` 触发 `runtime.start()`。
+- status() 返回 host 侧 runtime snapshot：state/version/dataDir/logPath/baseUrl/error。
+- 工具 execute 在 host Node 内连后端；**浏览器 renderer 从不直连后端端口**。
+- exe 定位：`packagedExecutable(runtimeRoot)` 基于
+  `fileURLToPath(new URL("../runtimes/", import.meta.url))` 读 `runtime.json`
+  （version/target/executable/files+sha256）自定位，**不依赖环境变量**。
+
+## 4. 根因结论
+
+### 根因 1（确定，架构偏离官方范本）：状态卡走浏览器直连后端，未走 host 同源代理
+
+- 本插件 `src/client.js` 在 renderer 里直接 `fetch("http://127.0.0.1:8765/v1/status")`；
+  host 侧只 `ctx.inject(["subprocess"], ...)`，**未 inject connection、未注册任何
+  `/api/gaussian/*` 同源路由**。
+- 后果一：后端不在 → 浏览器报 `TypeError: Failed to fetch`，且卡片拿不到 host 真实
+  state/error/owned/orphan 快照，无法触发 host retry/spawn。
+- 后果二：即便后端被拉起，renderer origin（`dsh-app://app`）不在后端 CORS 正则内
+  （curl 实测 `app://app` 有 ACO、`dsh-app://app` 无 ACO、`OPTIONS` 预检 400），
+  浏览器同样拦截。
+- 与 aifs 的本质差异：aifs renderer 只访问同源 `/api/aifs/status`，状态由 host 快照提供。
+
+### 根因 2（最可能分支，待卡片显示真实 error 后最终确认）：exe 定位只依赖环境变量
+
+- `_resolveExecutable()` 只读 `process.env.GAUSSIAN_BACKEND_EXE`（config.backendExe）；
+  host 进程环境块若没继承到该变量（设完变量未完全退出 DSH 重启等），backendExe=null
+  → state=failed、error=「未找到 gaussian-backend.exe」→ 后端不拉起。
+- aifs 用包内 `runtime.json` 自定位作为兜底，不依赖环境变量；本插件缺这条兜底路径。
+- 其余 spawn 失败分支（无 subprocess 服务 / spawn 后崩溃 / _waitReady 超时）需在修好
+  connection 代理、卡片能显示 host state+error 后，由真实重启 DSH 观察 `manager.error`
+  字段最终归类，本轮不预设结论。
+
+## 5. 修复方案 R15（最小改动，照搬 aifs 官方架构；不动后端状态机与业务逻辑）
+
+### 5.1 host `src/index.js`
+
+1. 新增包内 exe 自定位 `packagedExecutable()`：基于 `import.meta.url` 解析
+   `../runtimes/<platform>-<arch>/runtime.json`，校验 version/target/executable 与
+   executable 自身 sha256，返回绝对路径；异常返回 null。
+2. `_resolveExecutable()` 三级兜底：环境变量（存在才用）→ 包内 manifest 自定位 → null。
+3. `BackendManager.snapshot()`：返回 `{state, version, mode, owned, baseUrl, dataDir,
+   error, ready, backend}`；ready 时后台拉 `/v1/status` 充实 backend 摘要，失败不阻塞快照。
+4. `apply`：保存 subprocess 服务引用供 retry 闭包调用；新增
+   `ctx.inject(["connection"], ...)` 注册：
+   - `GET /api/gaussian/status` → `Response.json(await manager.snapshot())`；
+   - `POST /api/gaussian/retry`（仅 managed）→ `manager.start(subprocessService)` 后
+     返回 snapshot；`start` 幂等，retry 安全。
+5. 顶层 `inject` 保持 `["tools","systemPrompt"]`；connection/subprocess 走子
+   `ctx.inject`，与 aifs 一致。
+
+### 5.2 renderer `src/client.js`
+
+6. 状态请求改同源 `fetch("/api/gaussian/status")`；retry 改 `POST /api/gaussian/retry`；
+   不再由 renderer 直连后端端口。
+7. 渲染 host snapshot：state 中文映射（idle/starting/ready/failed/external/reused/
+   stopped/orphan）、version、baseUrl、dataDir；backend 存在时再展示 gaussian.exe/
+   exists、work_dir、mem/nproc、sobko、running_job；错误行显示 `snapshot.error`。
+
+### 5.3 后端（本轮不改、不重打 onedir）
+
+- 状态卡改同源代理后浏览器不再直连 8765，CORS 不再是状态卡链路必经环节。
+- `dsh-app://` 补入 CORS 正则记为可选 Minor（external 手动直连场景兜底），本轮不动
+  后端、不重打 PyInstaller。
+
+## 6. 改动清单与备份
+
+- 备份目录：`docs/backups_20261022_r15/`
+  - `src_index.js.bak_20261022-r15`（35,005 B）
+  - `src_client.js.bak_20261022-r15`（5,707 B）
+- 待改：`src/index.js`、`src/client.js`；改完 `node scripts/build.mjs` 重打 `lib/`，
+  覆盖 profile 快照 `node_modules\@gaussian\dsh-plugin-gaussian\lib\`（快照为复制副本，
+  非软链），`node --check` 并比对 SHA256。
+
+## 7. 离线验证步骤（不启动 DSH、不拉起后端）
+
+1. `node scripts/build.mjs` 成功生成 `lib/index.js`、`lib/client.js`。
+2. `node --check lib/index.js`、`node --check lib/client.js` 通过。
+3. 快照 `lib/` 覆盖后与源码产物 SHA256 一致。
+4. `node scripts/verify_plugin_shape.mjs`、`node scripts/verify_profile_bundle.mjs`
+   与通用 `verify_plugin_manifest.mjs --pkg "@gaussian/dsh-plugin-gaussian" --id gaussian` 通过。
+5. `node docs/_verify/output_contract_check.mjs` 18/18 仍 PASS（确认未破坏 tool output 契约）。
+
+## 8. 待真实 DSH 重启确认项（离线无法证明，如实标注 NOT RUN 前不写 PASS）
+
+- managed 自动拉起：spawn → health ready → owned=true；卡片 state=ready。
+- 若 state=failed，按 `snapshot.error` 归类：无 subprocess 服务 / exe 未定位 /
+  spawn 崩溃 / waitReady 超时。
+- external reuse：预设后端已存在时 probe 成功 → owned=false；dispose 不关闭外部后端。
+- controlled dispose：受控 HTTP shutdown + `waitForExit()===true` 才清 owned。
+- orphan：shutdown/terminate 后仍未确认退出 → 保留 handle、保持 owned、标 orphan。
+- dispose/start race：backend 刚 ready 同时被 dispose，走 controlled stop，
+  不出现 owned=true + handle=null 不一致终态。
+- 18 个工具在对话内注册可见。
+
+## 9. 安全边界（沿用既有策略，本轮不变）
+
+- 严格串行、PID 身份 None 不可判定时保守继续占 lease；
+- managed shutdown 优先受控关闭，不主动杀 Gaussian 进程树；
+- 失败状态如实暴露，不伪造 ready/PASS；
+- 不安装到 C 盘；后端 exe 与 onedir runtime 本轮不重打。
+
+## 10. 2026-10-22 重启实机闭环追加记录（不回改第 8 节离线阶段判断）
+
+- **已确认 PASS**：managed 自动拉起 spawn → health ready，卡片 state=ready、状态「可用」；版本 0.2.0、后端地址 `http://127.0.0.1:8765`、数据目录、Gaussian 路径 `D:\G16W\g16.exe` 可用、工作目录、默认内存 12GB / 核数 8、Sobko `bm25_only`、运行中任务「否」、重试按钮均由 host snapshot + 后端摘要渲染；bundles 未被崩溃恢复摘除；不再出现 `Failed to fetch`。
+- **仍待观察（NOT RUN）**：state=failed 错误归类分支（本轮未触发，无样本）；external reuse → owned=false；controlled dispose 仅 `waitForExit()===true` 清 owned；orphan 保留 handle；dispose/start race 走 controlled stop；18 个工具在对话内注册可见并可实际调用；retry 按钮触发 host 幂等 start。
+- 证据边界：本次截图只证明启动态与状态卡渲染链路，不外推到 reuse/dispose/orphan/race 与对话工具注册（见 `LESSONS_LEARNED.md` 第 35 条、技能 `dsh-plugin-toolkit` 4.5 节与 K12）。

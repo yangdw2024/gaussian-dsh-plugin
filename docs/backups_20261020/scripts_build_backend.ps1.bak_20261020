@@ -1,0 +1,72 @@
+# build_backend.ps1 — 构建 gaussian-backend.exe
+#
+# 用法：
+#   .\scripts\build_backend.ps1           # 正式构建（one-file）
+#   .\scripts\build_backend.ps1 -Onedir    # onedir 模式调试（排 DLL 问题）
+#
+# 注意：
+#   - 先 onedir smoke build 排 DLL 问题，确认 RDKit 正常后再 one-file release
+#   - 需要在 gaussian-dsh conda 环境中运行（或当前 Python 环境有所有依赖）
+
+param(
+    [switch]$Onedir
+)
+
+$ErrorActionPreference = "Stop"
+$projectRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $projectRoot
+
+Write-Host "=== Gaussian Backend Build ===" -ForegroundColor Cyan
+Write-Host "Project root: $projectRoot"
+
+# 检查 PyInstaller
+$pyinstaller = & python -m PyInstaller --version 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: PyInstaller not installed. Run: pip install pyinstaller" -ForegroundColor Red
+    exit 1
+}
+Write-Host "PyInstaller version: $pyinstaller"
+
+# 清理旧构建
+Write-Host "Cleaning old build..."
+Remove-Item -Path "build" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "dist" -Recurse -Force -ErrorAction SilentlyContinue
+
+$spec = "packaging\gaussian-backend.spec"
+
+if ($Onedir) {
+    Write-Host "Building ONEDIR (debug mode)..." -ForegroundColor Yellow
+    # onedir 模式需要修改 spec，这里用 --onedir 标志覆盖
+    # 简化处理：直接用 spec，输出到 dist/
+    & python -m PyInstaller --clean -y --distpath dist/onedir $spec
+} else {
+    Write-Host "Building ONE-FILE (release mode)..." -ForegroundColor Green
+    & python -m PyInstaller --clean -y $spec
+}
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "BUILD FAILED" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host ""
+Write-Host "=== Build Complete ===" -ForegroundColor Green
+
+if ($Onedir) {
+    $exe = "dist\onedir\gaussian-backend\gaussian-backend.exe"
+} else {
+    $exe = "dist\gaussian-backend.exe"
+}
+
+if (Test-Path $exe) {
+    $size = (Get-Item $exe).Length / 1MB
+    Write-Host "Output: $exe"
+    Write-Host ("Size: {0:N1} MB" -f $size)
+} else {
+    Write-Host "WARNING: Expected exe not found at $exe" -ForegroundColor Yellow
+    Get-ChildItem -Path "dist" -Recurse -Filter "*.exe" | Select-Object FullName
+}
+
+Write-Host ""
+Write-Host "Next: run smoke test"
+Write-Host "  .\scripts\smoke_test_backend.ps1"

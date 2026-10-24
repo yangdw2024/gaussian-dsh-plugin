@@ -1,0 +1,228 @@
+---
+name: dsh-plugin-toolkit
+description: 安装、开发、激活与排障 DeepSeek Harness（DSH / Cordis）第三方插件。当用户提到 DSH、DeepSeek Harness、Cordis 插件、插件不出现在内置区、工具未注册、tools without inject、duplicate factory、bundle 未加载、managed 后端拉起/退出、client 状态卡、状态卡 Failed to fetch、connection 同源代理、runtime.json BOM、包内 exe 自定位、profile cordis.patch.yml、bundles 开关，或写出 $dsh-plugin 时使用。
+---
+
+# DSH Plugin Toolkit — DeepSeek Harness 第三方插件安装 / 激活 / 排障通用手册
+
+## Overview
+
+DSH（DeepSeek Harness）是"一切皆插件"的 Cordis 应用。一个第三方插件分 **Host 半侧**（Node，注册工具/提示词/拉起外部后端）和 **Client 半侧**（浏览器，注入状态卡/聊天节点/设置表单）。本技能把本机两轮真实踩坑沉淀成标准流程与离线校验脚本，适用于任何本地 `file:` 安装的第三方插件，不绑定具体业务。
+
+> 深度架构细节见项目文档 `docs/DSH_ARCHITECTURE.md`（gaussian-dsh-plugin 仓库内）；官方真源见第 8 节链接。本 SKILL 只保留动手必需的最小集合。
+
+## Core Rules（先遵守再动手）
+
+1. **改 profile 前先备份** `package.json`、`cordis.patch.yml` 到带日期的备份目录；回滚直接用备份覆盖。
+2. **不要手改 `cordis.yml`**：它恒为 `[]`，文件头注释明确"编辑 `cordis.patch.yml`"。
+3. **只进 `dependencies` 不等于激活**：第三方包必须同时进 `dsh.profile.bundles`，自带 patch 才会进 host loader。
+4. **pnpm 快照是复制副本，不是软链**：改完源码 `lib/` 必须覆盖到 `node_modules\<pkg>\lib\`，DSH 才读新版。
+5. **未启用 HMR 时，bundles/disabled/代码改动都要完全退出 DSH 再启动才生效**；不要在旧进程里反复开关验证。
+6. **不伪造运行结果**：没重启 DSH、没看到卡片/工具，就标"待实机确认"；后端未拉起、外部程序缺失如实写 NOT RUN。
+7. **managed 后端退出判定只认 `waitForExit() === true`**：Promise/句柄存在不等于退出；reuse 的外部后端 `owned=false`，dispose 不得关闭它。
+8. 禁止把依赖装到 C 盘；profile 目录由 DSH 自己管理，业务产物放项目目录。
+9. **每个工具必须声明 `output { schema, render, presentationMeta? }`**：缺 output、render 非函数、schema 越界都会让整 entry 在第一个工具处激活失败（报错 `tool "<name>" must declare output { schema, render, presentationMeta? }`），见 6.5 与坑位 K8。
+10. **系统提示工具清单必须与注册工具一一对应**：`ctx.systemPrompt.section` 手写的工具名集合要和 `buildTools` 注册名集合做差集；漏写不阻断加载，但模型不知道该工具、不会调用，见 6.3 第 6 条与坑位 K9。
+11. **状态卡走 host `connection` 同源代理**：浏览器 renderer 禁止直连后端 `127.0.0.1:port`；host 注册 `/api/<ns>/*` 路由，client 用相对路径访问，host snapshot 透传真实状态与错误，见 6.6 与坑位 K10/K11。
+
+## 1. 本机固定路径（Desktop 形态）
+
+| 用途 | 路径 |
+|------|------|
+| profile 根 | `C:\Users\Administrator\.dsh\profiles\desktop\` |
+| 包清单（dependencies + bundles） | `profiles\desktop\package.json` |
+| 用户 patch 层（配置覆盖 / entry disabled） | `profiles\desktop\cordis.patch.yml` |
+| 根条目列表（勿手改，恒 `[]`） | `profiles\desktop\cordis.yml` |
+| 包快照（复制副本） | `profiles\desktop\node_modules\<pkg>\` |
+| 插件管理日志 | `profiles\desktop\.plugin-manager\logs\` |
+| 崩溃日志（Host / Web boot 两类） | `C:\Users\Administrator\AppData\Roaming\@deepseek-ai\dsh-desktop\logs\crash-*-host.log`、`crash-*-web-boot.log` |
+| DSH 程序资源（内置全部子系统） | `E:\DSH\resources\app.asar` |
+
+> 换 profile 时把 `desktop` 换成对应 profile 名；profile 目录可用环境变量 `DSH_PROFILE_DIR` 传给校验脚本。
+
+## 2. 架构最小模型（动手前先理解）
+
+- **三平面**：Host（Node 服务/工具/子进程）、Web Client（浏览器 UI）、Desktop Electron 壳（同一文档内激活客户端插件，IPC 承载注入/就绪/致命错误/关闭）。
+- **层序**：各 bundle 自带 `cordis.patch.yml` 按 `dsh.profile.bundles` 顺序叠加 → profile `cordis.patch.yml` → home patch → `--patch` overlay；上层按 `id` 覆盖。
+- **Host 插件对象**：`export default { name, inject, apply(ctx) }`；`inject` 声明等待的服务（`tools`、`systemPrompt`、`subprocess`、`agents`、`sessions`…），框架等服务就绪才跑 `apply`。
+- **Client 插件**：`exports["./client"]` + `dsh.client.platform === "web"`；浏览器服务是 `slots`、`locale`、`configForms`；`dsh.client.inject` 列基座客户端服务包名。
+- **内置区卡片链路**：Host entry 已启用 → client-modules 扫描到 `dsh.client` → `/plugins` 下发 bundle → 浏览器物化 → client fiber 在 `plugins.item` 槽位注册。三段任一断链，卡片都不出现。
+
+## 3. 标准目录与清单（新插件骨架见 templates/）
+
+> 新插件从 `templates/` 复制四个骨架到项目目录，全局替换占位符：`__PKG_NAME__`（裸包名）、`__ENTRY_ID__`（稳定 entry id）、`__ORDER__`（槽位顺序号）、`__NAMESPACE__`、`__TITLE_ZH/EN__`、`__DESCRIPTION_ZH/EN__`；`templates/package.json.template` 末尾注释是字段说明，不进 JSON。
+
+```
+<plugin-root>/
+├── package.json              # type:module、main、exports、dsh.bundle.patch、dsh.client.*
+├── cordis.patch.yml          # bundle patch：- insert: { id, name }
+├── src/index.js              # Host 源码
+├── src/client.js            # Client 源码
+├── lib/index.js             # 构建产物（Host 入口）
+├── lib/client.js            # 构建产物（浏览器惰性 CJS factory）
+└── scripts/build.mjs        # 构建（esbuild / tsdown clientBundle preset）
+```
+
+`package.json` 必备字段（对照 `templates/package.json.template`）：
+
+| 字段 | 值/说明 |
+|------|---------|
+| `type` | `"module"` |
+| `main` | `"./lib/index.js"` |
+| `exports["."]` | `"./lib/index.js"` |
+| `exports["./client"]` | `"./lib/client.js"` |
+| `exports["./package.json"]` | `"./package.json"` |
+| `dsh.bundle.patch` | `"./cordis.patch.yml"` |
+| `dsh.client.platform` | `"web"` |
+| `dsh.client.inject` | 基座客户端服务包名数组（如 `["@deepseek-ai/dsh-client-locale"]`） |
+| `engines.dsh` / `peerDependencies` | 需要版本门槛时声明；都不写则兼容性检查直接放行 |
+
+## 4. 本地 `file:` 安装 / 激活标准流程
+
+1. **构建产物先就位**：`node scripts/build.mjs`，确认 `lib/index.js`、`lib/client.js` 存在且为最新。
+2. **备份 profile**：复制 `package.json`、`cordis.patch.yml` 到项目备份目录（`.bak_YYYYMMDD` 惯例）。
+3. **写入依赖与 bundles**（等价 `dsh plugin --profile desktop add <dir>`；手动编辑时两份清单都要改）：
+   - `dependencies` 加 `"<pkg>": "file:<绝对目录>"`；
+   - `dsh.profile.bundles` 追加本包名（顺序影响层优先级，追加到末尾）。
+4. **检查 patch 无残留关闭**：`cordis.patch.yml` 不得有 `- id: <entry-id> / disabled: true`。
+5. **安装依赖**：在 profile 目录用 DSH 自带 pnpm 执行 install；把 `lib/` 覆盖到 `node_modules\<pkg>\lib\`（快照非软链）。
+6. **离线校验**：跑第 5 节脚本，全部 PASS 再重启 DSH。
+7. **完全退出 DSH**（托盘退出，进程结束）→ 重新打开 → 观察内置区卡片、对话工具列表、后端健康状态。
+
+## 5. 离线校验脚本
+
+### `scripts/verify_plugin_manifest.mjs`（通用，参数化）
+
+```powershell
+# 默认 profile: C:\Users\Administrator\.dsh\profiles\desktop
+node "<skill_dir>\scripts\verify_plugin_manifest.mjs" --pkg "@scope/plugin-name"
+
+# 指定 profile 目录 / 插件根目录
+node "<skill_dir>\scripts\verify_plugin_manifest.mjs" `
+  --pkg "@scope/plugin-name" `
+  --profile "C:\Users\Administrator\.dsh\profiles\desktop" `
+  --plugin "E:\path\to\plugin-root"
+```
+
+校验项：
+- profile `package.json` 的 `dsh.profile.bundles` 含本包名；
+- profile `cordis.patch.yml` 无本包 id 的 `disabled: true`；
+- 快照 `package.json` 可解析，`main`、`exports["."]`、`exports["./client"]`、`dsh.bundle.patch`、`dsh.client.platform === "web"` 齐全；
+- `lib/index.js`、`lib/client.js`、bundle patch 文件在位；
+- Host 导出对象（`ns.default ?? ns`）带 `name`、`inject`、`apply`。
+
+### 手动补查
+
+```powershell
+node --check "<profile>\node_modules\<pkg>\lib\index.js"
+node --check "<profile>\node_modules\<pkg>\lib\client.js"
+node -e "JSON.parse(require('fs').readFileSync('<profile>\node_modules\<pkg>\package.json','utf8'))"
+```
+
+## 6. 排障决策树（按现象定位层）
+
+### 6.1 启动崩溃：`web boot: 1 entry did not activate <pkg>`
+1. 读最新 `crash-*-web-boot.log`，找包名与错误类名。
+2. `import failed`：`exports["./client"]` 不可解析、`lib/client.js` 缺失或语法错误。
+3. `duplicate factory registration`：Host `name` 与 client 模块 id 同名（见坑位 K2）。
+4. `cannot get property "tools" without inject`：Host 插件对象缺 `inject`（见坑位 K1）。
+4b. `tool "<name>" must declare output { schema, render, presentationMeta? }`：工具缺 output 契约（见坑位 K8、6.5）。
+5. client `pending (waiting for service: <svc>)`：`dsh.client.inject` 列的基座服务包名不存在或版本不符。
+6. Host 崩溃看 `crash-*-host.log`：`apply(ctx)` 抛错、`inject` 服务未注册、Config schema 校验失败。
+
+### 6.2 已安装区可见，内置区没有卡片
+按链路逐段查：
+0. **先复查 bundles 是否被重启/崩溃恢复批量摘除（K7）**：打开 `package.json` 确认本包仍在 `dsh.profile.bundles`；先读最新 `crash-*-main.log`、`crash-*-web-boot.log` 区分启动期 `ERR_CONNECTION_REFUSED` 与插件 entry 报错。
+1. bundles 是否含本包名（K3）；
+2. `cordis.patch.yml` 是否残留 `disabled: true`（K4）；
+3. manifest 字段与 `lib/client.js` 是否齐全、是否最新快照（K5、K6）；
+4. Host entry 是否真激活（fiber 空/disabled 时 client-modules 直接跳过）；
+5. Host release 与页面启动图版本/commit 是否一致；不一致重启对齐。
+
+### 6.3 对话里看不到工具
+1. Host `inject` 含 `tools`；`ctx.tools.register(...)` 在 `ctx.effect()` 内并返回 disposer。
+2. `defineTool` schema 合法，`parameters` 必填键标注；直接注册原始 JSON Schema 时自查校验。
+3. 新工具需**新开一轮对话**才进入提示词组装。
+4. `tools.restrict()` / agent preset 是否排除本工具（preset 条目只读）。
+5. 启动黄条 `tool "<name>" must declare output { schema, render, presentationMeta? }`：不是参数问题，是 output 契约缺失/非法，按 6.5 与 K8 修。
+6. 系统提示（`ctx.systemPrompt.section`）里手写的"工具列表"必须与 `buildTools` 注册名**一一对应**：漏写某个工具不阻断注册，但模型不知道它存在、不会主动调用；新增/改名工具时同步更新提示词清单（R14c 实测）。
+
+### 6.5 工具 output 契约（新版 dsh-tools register 校验，本机 asar 实证）
+
+`tools.register(definition)` 注册前硬性校验，任一项不满足整 entry 在该工具处中断：
+
+- `output` 必须是**对象**；`output.render` 必须是**函数**；`output.presentationMeta` 若存在也必须是函数。
+- `output.schema` 必须通过 `assertSupportedJsonSchema`；执行期返回值还会按 schema 再校验一次。
+- schema 子集：标量 `type` 仅 `object/array/string/number/integer/boolean/null`，**没有 `type:"json"`**；不约束输出用空对象 `schema: {}`；允许 type/oneOf/properties/required/additionalProperties/items/enum/const 加 description/title/default/examples；type 与 oneOf 不能并存。
+- `render(args, value)` 返回可无损 JSON 序列化的投影；标准文本块 `[{ type:"text", text: JSON.stringify(value) }]`；`presentationMeta(args, value)` 可选，纯函数不做 I/O。
+- 工厂层统一兜底（不要每个工具重复写）：
+
+```js
+const defaultRenderJson = (_args, value) => [{ type: "text", text: JSON.stringify(value) }];
+function defineTool(options) {
+  return {
+    name: options.name,
+    description: options.description,
+    parameters: options.parameters ?? {},
+    timeoutMs: options.timeoutMs,
+    output: {
+      schema: options.output?.schema ?? {},
+      render: typeof options.output?.render === "function" ? options.output.render : defaultRenderJson,
+      ...(typeof options.output?.presentationMeta === "function"
+        ? { presentationMeta: options.output.presentationMeta } : {}),
+    },
+    execute: options.execute,
+  };
+}
+```
+
+- 离线先验：mock `ctx.tools.register` 走真实 `plugin.apply(ctx)` 收集工具，逐个复核 output 对象/render/presentationMeta/schema，并实跑默认 render 确认可序列化；不要靠反复重启 DSH 碰运气。
+- 附带一致性检查：收集到的工具名集合，要与系统提示 `section` 文本里列出的工具名集合做差集，差集非空即提示词漏列/多列（R14c：13 个提示词名对 18 个注册工具，4 个后处理工具漏写）。
+
+### 6.4 managed 后端未拉起 / 假报成功
+1. `resolveExecutable` 拒绝相对路径；exe 绝对路径必须存在。
+2. `DSH_*` 环境命名空间会被框架清理；业务变量走 `env` 显式条目；`undefined` 作为 tombstone 删除同名普通环境值。
+3. 退出只认 `waitForExit() === true`；`done` resolve 不等于受管范围清空；reuse 路径不关闭外部进程。
+4. 后端 `/health` 返回的 service 名、version 要与插件期望一致，避免误认其他进程。
+
+### 6.6 状态卡走 host `connection` 同源代理（禁止 renderer 直连后端端口）
+1. **浏览器 renderer 不要 `fetch("http://127.0.0.1:<port>/...")`**：后端未拉起即 `TypeError: Failed to fetch`；renderer origin 为 `dsh-app://app`，后端 CORS 通常只放行回环 origin，会被跨域拦截；卡片也拿不到 host 的 state/error/owned/orphan，无法触发 host 侧 retry/spawn。
+2. **官方契约（解包 `@deepseek-ai/dsh-client-connection` 实证）**：服务名 `"connection"`；`child.connection.fetch.register({ path: "/api/<ns>/status", methods: ["GET"], requestBody: "buffered", fetch: async (request) => Response.json(...) })`；path 必须 `/api` 前缀、methods 非空不重复、按 `url.pathname` 精确匹配；host 在 webServer 注册 `/api` 总路由，renderer 用相对路径 `/api/<ns>/status` 同源分发、无跨域；register 返回注销函数，disposer 里调用注销。
+3. **子注入即可**：顶层 `inject` 不必列 `connection`；在 `apply(ctx)` 内 `ctx.inject(["connection"], child => { const dispose = child.connection.fetch.register({...}); return dispose; })`，与 `subprocess` 子注入方式一致（范本 aifs 即此写法）。
+4. **host snapshot 优先**：状态卡展示 host 视角 `{ state, version, mode, owned, ready, baseUrl, dataDir, error, backend }`；仅 `state==="ready"` 才在 host Node 内拉后端 `/v1/status` 摘要放进 `backend`；retry 路由在 host 内触发幂等 `manager.start(subprocessService)` 后返回 snapshot。失败原因来自 `manager.error` 经 snapshot 透传，不要让 renderer 自己猜。
+5. **包内 exe 自定位兜底**：环境变量 `GAUSSIAN_BACKEND_EXE` 存在且文件存在才优先用；否则 `fileURLToPath(new URL("../runtimes/", import.meta.url))` 读包内 `runtime.json`，校验 `target/version` 与 executable 自身 sha256，拒绝绝对路径与 `..` 越界；任一不符返回 null 交状态机降级。**`runtime.json` 可能带 UTF-8 BOM**：Node `JSON.parse(readFileSync(mp,"utf8"))` 在首字符 BOM 处抛 `Unexpected token '﻿'`，解析前必须 `.replace(/^\uFEFF/,"")` 剥离；源码里写显式 `\uFEFF` 转义，不要写字面 BOM 字符。
+
+## 7. 实测坑位清单（K1–K11，逐条对照自查）
+
+| 编号 | 现象 | 根因 | 正确做法 |
+|------|------|------|----------|
+| K1 | `cannot get property "tools" without inject` | 只 `export const inject`；loader 取 `module.default` 作为插件对象，从该对象读 `inject`，named export 被忽略 | `export default { name, inject, apply }`，inject 进 default 对象 |
+| K2 | web boot 崩 `duplicate factory registration` | Host `name` 与 client 模块 id 同名重复注册 factory | client 模块 id 用完整包名，与 Host 内部服务名区分 |
+| K3 | 开关已开但内置区无卡片，只显示包名+英文 description | 包只在 `dependencies`，未进 `dsh.profile.bundles`，自带 patch 没进 host loader | 把包名追加进 `dsh.profile.bundles` |
+| K4 | 补进 bundles 后 entry 仍被关 | profile `cordis.patch.yml` 残留 `- id: <id> / disabled: true`，user layer 最后叠加 | 删除残留 disabled 段 |
+| K5 | 改源码后 DSH 行为不变 | pnpm 复制快照非软链 | 改完 `lib/` 覆盖快照 `lib/`，`node --check` 后重启 |
+| K6 | client 半侧缺失 bundle 导致激活失败 | 未先产出 `lib/client.js` 就启动 | 启动前确认两个 `lib/*.js` 在位且为已构建产物 |
+| K7 | 重启/崩溃恢复后插件突然从 bundles 消失（连正常工作的第三方包一起被摘） | DSH 启动崩溃（如启动期 `ERR_CONNECTION_REFUSED` 本地端口拒绝）触发恢复流程，批量把非官方 bundle 移出 `dsh.profile.bundles`，dependencies 保留；这不是插件代码报错 | 每次重启后先读最新 `crash-*-main/web-boot.log` 区分：`ERR_CONNECTION_REFUSED`=本地服务启动网络问题；`entry did not activate / import failed`=插件代码问题；再复查 `package.json` 的 bundles 是否被批量摘除，必要时把第三方包名重新追加，观察是否再次被摘；别把 K7 误判成 K3 的新复发 |
+| K8 | 卡片已进内置区，但黄条 `tool "<name>" must declare output { schema, render, presentationMeta? }`，第一个工具中断、整 entry 工具全部未注册 | 工具对象缺新版强制 `output` 对象；旧版只写 `{name,description,parameters,timeoutMs,execute}`；render 非函数或 schema 含不支持 type 也会触发 | 在 `defineTool` 工厂层统一兜底 `output={schema: options.output?.schema ?? {}, render: options.output?.render ?? defaultRenderJson, ...presentationMeta?}`；schema 子集见 6.5；离线契约自测逐个工具复核后再重启 |
+| K9 | 工具已注册成功、无报错，但模型从不主动调用某个工具 | 系统提示 `section` 里手写的"工具列表"漏写该工具名；注册与提示词是两条独立链路，漏写不阻断加载，只是模型不知道它存在 | 把 `buildTools` 注册名集合与提示词文本工具名集合做差集，补全漏列；新增/改名工具时同步更新提示词（R14c：13 个提示词名对 18 个注册工具，4 个后处理工具漏写） |
+| K10 | 卡片标题/描述已渲染，状态区一直「正在读取服务状态…」并红字 `TypeError: Failed to fetch`，重试无效 | renderer 直连后端 `127.0.0.1:port`，host 未 inject `connection`、未注册 `/api/<ns>/*` 同源路由；后端未拉起即失败，`dsh-app://app` 也不在后端 CORS 内；卡片拿不到 host state/error/owned/orphan 与 retry 能力 | host `ctx.inject(["connection"])` 注册 `GET /api/<ns>/status`、`POST /api/<ns>/retry`；client 只走相对路径同源路由；host snapshot 透传真实状态与错误，详见 6.6；不要在浏览器直连后端端口 |
+| K11 | 包内 exe 自定位静默返回 null，环境变量一缺失就误判「未找到 exe」 | `runtime.json` 由 PowerShell 写出带 UTF-8 BOM，Node `JSON.parse(utf8)` 在首字符抛错，被 try/catch 吞成 null；只依赖环境变量时 host 进程环境块可能没继承到用户变量 | 解析前 `.replace(/^\uFEFF/,"")` 剥 BOM；定位顺序：显式环境变量（文件存在）→ 包内 manifest 自定位（校验 target/version/sha256、拒绝越界）→ null 降级；离线复刻自定位对快照 manifest 校验通过再重启 |
+
+## 8. 官方参考（联网核对，2026-10-21 口径）
+
+- 总体架构：https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.zh.md
+- Cordis 入门：https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cordis-primer.zh.md
+- 扩展手册：https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/extension-cookbook.zh.md
+- 添加包清单：https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/adding-a-package.zh.md
+- 工具参考：https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/adding-a-tool.zh.md
+- 配置卡片：https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/adding-a-settings-card.zh.md
+- Client 模块系统：https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/modules/README.zh.md
+- 插件管理器：https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/boot/plugin-manager/README.zh.md
+- subprocess seam：https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/subprocess.zh.md
+- 第一个插件/工具：`docs/user/develop/basic/index.zh.md`、`docs/user/develop/basic/tool.zh.md`
+
+## Scope
+
+- 覆盖：第三方本地/`file:` 插件的清单编写、双半侧骨架、profile 安装、离线校验、崩溃/卡片/工具/后端四类排障。
+- 不覆盖：DSH 第一方包内部重构、Host 服务框架开发、npm registry 发布流程、Electron 壳本身改动。
+- 遇到官方文档与本机 asar 行为冲突时，以本机 `app.asar` 解包源码为准，并把新坑补进第 7 节清单。

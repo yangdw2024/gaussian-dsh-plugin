@@ -1,0 +1,190 @@
+# 经验文档（Lessons Learned）
+
+> 记录执行过程中的错误和修复经验，避免重复踩坑。
+
+## 2026-10-20
+
+### 1. Gaussian Link 0 命令顺序：%NoSave 必须在 %Chk 之前
+- **错误**：先写 `%chk=xxx.chk` 再写 `%nosave`，Gaussian 会删除 chk 文件
+- **原因**：%NoSave 会删除其之前命名的所有 scratch 文件（包括 chk）
+- **正确写法**：`%mem=... %nprocshared=... %nosave %chk=xxx.chk`，或者直接不写 %nosave
+- **影响**：后处理链（formchk → Multiwfn）拿不到 checkpoint，整个流程断裂
+- **来源**：https://www.cenapad.unicamp.br/parque/manuais/Gaussian/00000483.htm
+
+### 2. PyInstaller one-file 模式下 sys.executable 指向 exe 自己
+- **错误**：子进程调用 `[sys.executable, script.py]`，冻结后变成 `gaussian-backend.exe script.py`
+- **原因**：PyInstaller 冻结后 sys.executable 是打包后的 exe 路径，不再是 python.exe
+- **解决方案**：新增 SOBKO_PYTHON_EXE 环境变量配置，冻结模式下必须显式指定 Python 路径
+- **来源**：https://www.pyinstaller.org/en/stable/runtime-information.html
+
+### 3. 15 GB 内存机器上的资源互斥
+- **教训**：Gaussian 12 GB + Multiwfn 网格计算 + VMD 渲染，三者绝对不能同时跑
+- **解决方案**：ChemComputeScheduler lease 机制，重型计算统一互斥
+- **网格估算**：250³ 单 float64 数组 = 119 MiB，6 个数组 = 715 MiB；300³ 就到 2 GB
+- **默认限制**：POSTPROCESS_MAX_GRID_POINTS = 16,000,000（≈252³）
+
+### 4. Multiwfn 菜单数字会随版本漂移
+- **教训**：不能把菜单数字硬编码在 Python 代码里
+- **解决方案**：版本化 profile JSON + banner probe，未知版本 fail-fast
+- **profile 文件**：backend/postprocess/profiles/multiwfn-3.8.json
+
+### 5. RDKit MMFF 默认忽略片段间相互作用
+- **教训**：盐（如 [NH4+].[Cl-]）用 MMFF 优化时，阴阳离子相对位置没有物理意义
+- **原因**：MMFF API 默认 ignoreInterfragInteractions=true
+- **解决方案**：多片段体系默认拒绝，要求 allow_disconnected=True 才处理
+- **来源**：https://www.rdkit.org/docs/cppapi/MMFF_8h_source.html
+
+### 6. PyInstaller 启动即退出：旧 pathlib backport 的 dist-info（M4）
+- **现象**：base 环境装了 `pathlib 1.0.1` backport（只剩 dist-info 元数据，无包代码，import 仍走标准库），PyInstaller 6.x 在 compat.py 启动期 `distribution("pathlib")` 命中元数据就 raise SystemExit，命令行参数无法绕过。
+- **错误做法**：在 base 里 pip uninstall（违反"不污染现有工作流环境"规则）。
+- **正确做法（零下载、可逆）**：构建脚本 try 里把 `pathlib-1.0.1.dist-info` 临时改名为 `.__tmp_rename`，finally 无条件改回；不卸载、不删文件，环境最终与构建前一致。备份在 docs/backups_20261020/。
+- **检查点**：改名后 `python -m PyInstaller --version` 能正常返回即说明绕过生效。
+
+### 7. PyInstaller 拒绝同时收集 PyQt5 + PyQt6（M4）
+- **现象**：base 环境两套 Qt 绑定并存，分析阶段报"multiple Qt bindings packages"中止。
+- **解决**：后端根本不用 Qt，在 spec 的 excludes 里显式排除 PyQt5/PyQt6/PySide2/PySide6/qtpy。
+
+### 8. conda 的 OpenSSL DLL 不会被 PyInstaller 自动收集（M4）
+- **现象**：exe 启动报 `ImportError: DLL load failed while importing _ssl: 找不到指定的程序`（anyio→ssl→_ssl.pyd 缺 libcrypto/libssl）。
+- **原因**：标准 hook 只收证书，conda 的 libssl-3-x64.dll/libcrypto-3-x64.dll 在 `Library\bin`，不在 pythonDLLs。
+- **解决**：spec 里按 `sys.executable` 推导 `Library\bin`，glob `libssl-*.dll/libcrypto-*.dll` 加入 binaries（跳过 .conda_trash/.pdb）。
+
+### 9. PowerShell 的 try 必须配 catch 或 finally，且 try 内不要用 exit（M4）
+- **现象**：解析报"Try 语句缺少 Catch 或 Finally"，常因 try 块内 `exit 1` 让控制流与大括号错位。
+- **解决**：try/catch/finally 完整结构，块内用 `throw` + `$buildOk` 标志，退出码在 finally 之后统一判断。
+
+### 10. pydantic 模型不能用 dataclasses.asdict（M2 遗留，M6 回归时暴露）
+- **现象**：postprocess manager 把 pydantic 的 PostprocessTask 传给 `dataclasses.asdict()`，create_task 保存时抛 `TypeError: asdict() should be called on dataclass instances`。
+- **原因**：M2 写 manager 时误用了 dataclasses 工具，而任务模型是 pydantic BaseModel；此前端到端没真正创建过 postprocess 任务，所以一直没触发。
+- **解决**：全部改用 `task.model_dump()`；pydantic 写入 JSON 用 model_dump，不要 import asdict。
+- **提醒**：单测只覆盖命令生成、没走到持久化时，这类 bug 会潜伏，端点级 TestClient 回归才能抓到。
+
+### 11. DSH managed 生命周期协议（M5）
+- 前端 `ctx.inject(["subprocess"], child => child.effect(() => { owned.start(); return async () => owned.dispose(); }))`；
+- 后端 stdout 打一行 ready record `{"event":"ready","service","version","baseUrl"}`，前端也可用轮询 /v1/health 兜底；
+- dispose 只 terminate 自己 owned 的进程，reuse 的别人进程绝不动；Gaussian 子进程由 /v1/admin/shutdown 保留、下次启动 reconcile 接管。
+- health 必须校验 `service` 名，不能只看 200，避免把同端口的其他服务误当后端。
+
+### 12. DSH `handle.done` 是 Promise，不是布尔（B3，第二轮）
+- **错误**：`if (handle.done)` 判断子进程是否退出——done 是 `Promise<SubprocessOutcome>`，对象恒为 truthy，进程还在跑也为真。
+- **正确**：`handle.done.then(finish, finish)` 订阅 settle，与 health 轮询 `Promise.race`；退出信号只从回调来，不从对象本身判断。
+- **契约**：以官方 subprocess.md 与参考插件 `@aifs/dsh-plugin-aifs` 的 `handle.done.then(...)` 用法为准，不凭 API 名字猜。
+
+### 13. SpawnSpec.cwd 是必需字符串，不要传 undefined（B4，第二轮）
+- **错误**：`cwd: this.config.dataDir || undefined`，默认 dataDir=null 时把 undefined 传进必需字段。
+- **正确**：先解析一个真实存在的绝对目录（dataDir→exe 所在目录，缺失则 mkdir）；实在拿不到就**省略 cwd 键**让运行时用默认，而不是塞 undefined。
+
+### 14. 提交边界校验必须放在"最后一道"，不能只保护输入生成接口（B7，第二轮）
+- **现象**：`_check_atom_count` 只在 SMILES/坐标生成接口生效，`POST /v1/jobs` 直接收 gjf_content 原样落盘提交，原子数/%mem/%nproc 全被绕过。
+- **做法**：在 job_manager.submit 内部对原始 GJF 文本再做一次 validate_gjf（原子数、%mem 换算 MB、%nproc、电荷/多重度）；任何入口最终都过这道关。
+- **易错点**：多重度 = 2S+1，可取 2（双态），**不是必须奇数**；初版误写成"必须奇数"已纠正。
+
+### 15. 长连接 stdio：阻塞 readline 无法超时，必须用读线程+缓冲（M7，第二轮）
+- **错误**：`while` 里 `readline()` 卡在没有新行时，前面的 `time.time()-start` 超时检查根本执行不到；stderr=PIPE 不消费还会写满反堵。
+- **做法**：后台 daemon 线程把 stdout 原始字节写进加锁缓冲，_recv_json 轮询缓冲按 Content-Length 取帧；stderr 单独线程消费留最近若干行；超时直接放弃并 kill 释放锁。
+- **验证**：卡死子进程应在设定超时（如 1.5s）返回 None，而不是等到子进程自己结束。
+
+### 16. 化学结果解析要"按方法取对应能量/按最后一步取轨道"（B8/M10/M9，第二轮）
+- MP2/CCSD 不能拿 SCF Done 的参考态当相关能：MP2 取 EUMP2、CCSD 取 E(CCSD)，数值正则要兼容 Fortran 科学计数 `E+02`。
+- 优化轨迹每步都打印轨道，HOMO/LUMO 取**最后一组** occ/virt（终态 SCF），不要遍历取全局最大。
+- 开壳层 α/β 能级不同，MO 图必须两栏并列、各自算 gap；只有 α 会误导。
+
+### 17. 资源 lease 必须和"进程是否真的启动"绑定一个事务（N2，第三轮）
+- acquire 之后、Popen 之前失败（写文件/构造命令/exe 缺失）→ 未启动，释放 lease；
+- Popen 成功后（哪怕随后 _save 抛错）→ Gaussian 已在跑，**绝不能在通用 except 里释放 lease**，否则允许第二个并发 Gaussian。
+- 用 `proc_started` 标志区分两种情形，不要用同一个 except 无差别 release。
+
+### 18. 校验器要 fail-closed，单位必须完整识别、未知即拒（N3，第三轮）
+- Gaussian %mem 除 GB/MB/KB 还有 word 单位 W/KW/MW/GW/TW（1 word=8 字节）；正则若只挑已知后缀、把未知当 MB，会把 20GW 严重低估成 20MB 放行。
+- 坐标要同时认元素符号与原子序数（`6 0 0 0`）；多段资源取 max 而非被后段覆盖。
+- 解析不出/未知单位直接 raise，不要"猜一个默认值"。
+
+### 19. 对接外部运行时先读它的枚举契约，别自己发明合法值（N1/N7，第三轮）
+- DSH SubprocessOutputMode 只支持 pipe/inherit/有界 collect，`"ignore"` 会在 spawn 参数校验阶段直接失败——这是改 M12 时自己引入的回归。
+- `waitForExit()` 返回布尔，不能 await 完就当退出成功；ownership 应在 spawn 成功即登记，而不是等到 ready，否则启动中卸载会泄漏已 spawn 进程。
+
+### 20. 正则要对着真实输出写，别漏字面符号（N5，第三轮）
+- `E\(?:CCSD\)?\)` 缺字面左括号，匹配不到真实的 `E(CCSD) =`；Fortran 双精度用 `D` 指数，只认 `E` 会把数值截断。
+- occ/virt 分别 findall 后要按最小长度配对取最后一组，LUMO 取配对块第一根虚轨道，不能各自取最后一块。
+
+### 21. 结构化改写后必须重算边界，插入会移位（R1，第四轮）
+- 只替换第一处 %chk 会漏掉多 Link1 段的第二条；无 chk 时若插到"第一条 % 指令前"，首行是 %nosave 就会让 chk 跑到 nosave 前被删。
+- 改写链路里一旦 insert，原 Link0 行号就移位，重排前必须**重新扫描 route(#) 边界**，否则尾部指令被错切。
+- 判据用"最后一个终止事件 + 其后有无 Error"，不要用整份日志子串包含（R4）。
+
+### 22. 轨道/网格这类"按位置归属"的数据，别用全局数组下标配对（R2/R3，第四轮）
+- 多 SCF 每步 virt 拆多行时，`min(len(occ),len(virt))` 同下标会错配到前一步；应用 finditer 拿位置，取末 occ 块之后的 virt。
+- cube 是固定版式：注释2行→原子数+原点1行→nx/ny/nz 各占一行首字段，读错列就全错；header 非法要 fail-closed raise，不能返回 -1/None 放行。
+- JSON-RPC 响应必须按请求 id 精确匹配，无 id 的通知帧在等待响应时要丢弃，不能当结果（R7）；句柄/连接类资源统一进 finally 关闭列表（R9）。
+
+### 23. 修一个顺序问题别顺手重排整段；持久化要有"最小恢复件"（R1/R5/R6，第五轮）
+- R2 末 occ 之后的 virt 可能拆多块，第一块从最低虚轨开始，LUMO 取 `following[0]` 而非 `following[-1]`。
+- R1 只调整 %chk/%nosave 两行的相对顺序，绝不能把 %mem/%nproc/%rwf 整体搬走——%RWF 相对 %nosave 的位置本身有保留语义；多 Link1 要逐段处理。
+- R5 完整 JSON 可能两次都写失败：Popen 后再落一份只含 pid/路径的最小 recover 文件，重启 reconcile 用它补齐接管；内存句柄也要作为并发判断兜底。
+- R6 所有权是状态：probe 到端口不代表是外部服务，持有自己 handle（含 orphan）时不能把 owned 改 false，否则 dispose 不再管理自己 spawn 的进程。
+
+### 24. 持久化写失败后，内存对象才是终态回收的真来源；锁内别再取同一把锁（R5/R7，第六轮）
+- 磁盘主记录写盘失败会停在 pending/pid=None，此时 reconcile 和 _finalize_if_dead 都认 status!=running 直接放过，lease 永久 busy。Popen 成功就把运行态 job 存内存，进程退出时用内存对象走统一 finalize，别等磁盘记录。
+- 列目录做"记录清单"时，glob 要排除辅助文件（*.recover.json），否则同一 job 重复出现、重复 acquire。
+- 写盘辅助函数吞异常返回成功是撒谎：要返回 bool，都失败时在错误里如实标注"重启后可能无法接管"。
+- 普通 threading.Lock（非 RLock）里绝对不要调用任何会再取这把锁的方法（本例 _kill）：锁内置标志、退出锁后再动作，否则保护逻辑自己先死锁。
+- dispose/关闭流程：先确认退出，再清所有权标志；未确认退出的 orphan 要保留 owned=true，后续才能认出这是自己的进程。
+
+### 25. 状态机要"全入口合流"：stop/reap/get 共用同一运行态来源（R5a/R2/Sobko/R9，第七轮）
+- 加了内存运行态（`_running_jobs`）却忘了 stop_job：磁盘 pending 时拒绝停止、停止后内存残留又被 get_job 覆盖回 failed。凡是改状态机，所有读写入口（submit/stop/get/reap/reconcile）都要用同一来源。
+- Popen 句柄 poll() 已确认退出是比裸 PID 存活性更可靠的事实；PID 会快速复用，不能用 pid_alive 再把它否决掉。而且"回收动作"要在真正落终态成功后才删凭据，失败时保留，否则 lease 永久 busy。
+- "找不到下一步"要保持未知（None），不要回退到上一个相似块：最终 SCF 没有 virtual，LUMO 就该未知，拿前一 SCF 的虚轨是错化学结果。
+- JSON-RPC 的每个带 id 请求都必须 expected_id 精确接收，包括 initialize——否则通知帧会被当响应。
+- 资源清理的 try/finally 要包住"获取资源"的全过程，不只 Popen：第一个文件句柄已开、第二个打开失败时，已开的也得在 finally 里关。
+
+### 26. 终态记录是最高权威，恢复件只能补中间态；PID 存活≠就是它（R8a/R8b，第八轮）
+- recover 这类"辅助凭据"只能补 pending/running 这类中间态；主记录已经 completed/failed/stopped，就绝不许用残留 recover 把它改回 running——哪怕崩溃发生在终态落盘之后、清 recover 之前。
+- PID 会复用：重启接管时只 `pid_alive` 不够，必须用 `pid_is_same_instance(pid, pid_start_time)` 对创建时间；不匹配就按原进程已结束处理，别把无关进程当自己的 Gaussian 接管、别重占唯一 lease。
+- 清理路径要复用同一入口：`_waitReady` 的卸载分支直接调底层 `_shutdownHandle` 会绕掉 owned 同步，应统一走 `_controlledStop`。
+
+### 27. 三态判定里 None 不等于 False：拿不准就保守，别放行（R9a/R9b，第九轮）
+- `pid_is_same_instance` 有 True/False/None 三种结果：None 是"创建时间缺失或取不到=不可判定"，不是"PID 被复用"。写成 `if alive and same_instance:` 会把 None 当假、落进"进程已结束"分支——串行系统里这等于误杀运行中任务、还放第二个任务进来。
+- 串行/互斥资源的默认方向：判不准时按"资源仍被占用"处理（保守保留 lease），只有证据确凿（明确 False）才放行/终结。误判"还在跑"最多多占一会；误判"已结束"会并发两个重资源任务。
+- 同一套实例判定要覆盖所有判断存活的入口（重启 adopt、后续轮询 finalize），不能只在一处做，否则 adopted 后裸 pid_alive 又会被 PID 复用骗到。
+
+### 28. 修好终态判断函数后，要回头清掉所有"入口短路"（R10，第十轮）
+- 把三态逻辑沉到 `_finalize_if_dead()` 后，别的入口（如 `has_running()`）可能还留着旧的裸 `pid_alive()` 提前 return。结果是同一个状态机出现两条路径：get_job() 走 helper 正确落终态，has_running() 短路永远返回 running——状态不一致，队列卡死。
+- 改完一个核心判定函数，要全局 grep 所有"判断进程是否存活"的调用点，确认它们都复用这个函数，而不是各写各的 truthy 判断。
+
+### 29. Cordis 插件的 inject 必须挂在 default 导出对象上，named export 会被忽略（R12，DSH 激活）
+- **现象**：插件激活报 `cannot get property "tools" without inject`。只在模块里 `export const inject = [...]` 不生效。
+- **机制（解包 DSH 自带 cordis 源码核实）**：`cordis-plugin-loader` 的 `unwrapExports` 优先取 `module.default` 作为插件对象；Cordis 再从这个对象读 `plugin.name / plugin.apply / plugin.inject / plugin.Config`。default 对象里没有 inject，fiber.inject 就是空的，访问 `ctx.tools` 直接抛错。
+- **正确写法**：`export default { name, inject, apply }`，把 inject 一并放进 default 对象；named export 可保留但不能只靠它。
+- **对照样本**：`@aifs/dsh-plugin-aifs` 没有 default，loader 回退到整个 namespace，inject 才被读到；一旦写了 default，就必须把 inject 补进 default。
+- **验证**：写 `scripts/verify_plugin_shape.mjs`，按 DSH 真实加载路径 `ns.default ?? ns` 取值，断言 `plugin.inject` 含 tools/systemPrompt、`apply` 是函数、`name` 存在，再重启 DSH，不要靠反复重启碰运气。
+- **附带坑**：DSH profile 的 `node_modules/@gaussian/...` 是 pnpm install 时复制的整份快照、不是软链；改完 `lib/` 必须同步覆盖到该目录，否则 DSH 加载的仍是旧副本。
+
+### 30. 只写进 dependencies 不等于激活：第三方插件必须进 `dsh.profile.bundles`（R13，DSH 装载层）
+- **现象**：tools inject 修好后后端不报错，但插件中文状态卡始终不进内置区，只在“已安装插件”显示原始包名。
+- **机制（`@deepseek-ai/dsh-app-boot` 源码实证）**：profile 树只按 `dsh.profile.bundles` 列表逐个应用各包 `dsh.bundle.patch`；只在 `dependencies` 里、不进 bundles 的包只是普通 npm 依赖，自带 `cordis.patch.yml`（insert entry）根本不会被合并进 host loader。后端 entry 不存在，`dsh-client-modules` 自然扫不到它的 `./client`，前端卡片也就不会注册。
+- **排查顺序**：先看 profile `package.json` 的 `dsh.profile.bundles` 是否含本包；再看 profile 根 `cordis.patch.yml` 有没有残留 `- id: <插件id> / disabled: true`（user layer 最后叠加，会把 entry 关掉）。两条都对齐已正常工作的对照插件（aifs）。
+- **离线先验**：重启前用 `createRequire(profile package.json).resolve('<pkg>/package.json')` 复刻 bundle 解析链，断言 `dsh.bundle.patch`、`dsh.client.platform==="web"`、`exports["./client"]`、main 入口文件都存在，避免重启后才发现路径/声明问题。
+- **兼容性门槛**：`evaluatePluginCompatibility` 只认 `engines.dsh` 和 `peerDependencies` 里的 `@deepseek-ai/dsh*`；未声明即放行，不要在 `engines.node` 里误写 dsh 版本约束。
+- **改 profile 配置前先备份** `profiles/desktop/package.json` 与 `cordis.patch.yml`；这两个是 DSH 运行时配置，不属于插件源码包，回滚要靠备份。
+
+### 31. 重启后插件"突然消失"，先分清崩溃类型，再复查 bundles 是否被批量摘除（K7，2026-10-21 实机）
+- **现象**：R13 把 gaussian 加进 bundles、清掉 disabled 后，一次 DSH 重启后 `package.json` 的 `dsh.profile.bundles` 只剩官方 base/web-app，aifs 与 gaussian 两个第三方包被同时移出（dependencies 保留）；不是单个插件配置写错。
+- **先分类崩溃日志，别误判成代码回归**：`crash-*-main.log` / `crash-*-web-boot.log` 里 `net::ERR_CONNECTION_REFUSED` 是启动期本地服务端口拒绝（Host/本地后端没就绪），属于启动网络/环境问题；`1 entry did not activate <pkg>`、`import failed`、`duplicate factory` 才是插件 entry 代码问题。两类原因、两种修法。
+- **机制（本机实证）**：启动崩溃进入恢复流程后，profile `package.json` 被重写，第三方 bundle 被批量从 bundles 摘除；`cordis.patch.yml` 的 entry 覆盖不受影响。所以"上一轮改好的 bundles"可能在下次崩溃后被回退，**每次重启 DSH 后都要先读 bundles 列表确认第三方包还在**，再排查卡片/工具问题。
+- **处置顺序**：① 读最新两条崩溃日志定性；② 核对 `package.json` bundles 与 `cordis.patch.yml` disabled；③ 确认快照 `lib/` 是最新构建；④ 重新追加 bundles 后完全退出 DSH 再启动；⑤ 若同一包再次被自动摘除，解包 `app.asar` 回溯崩溃保护/黑名单逻辑，而不是反复改插件源码。
+- **纪律**：profile 配置（bundles、disabled）属于运行时状态，会被 DSH 自身改写；插件源码包内的 `cordis.patch.yml` 只描述 bundle 自带层，两者不要混为一谈，备份与回滚分别保留。
+
+### 32. 每个工具必须声明 `output { schema, render, presentationMeta? }`，缺一个整个 entry 激活失败（R14，DSH 工具契约）
+- **现象**：插件卡片已出现在内置区、host 已走到工具注册，但启动期报 `tool "gaussian_status" must declare output { schema, render, presentationMeta? }`，报错只点第一个工具；按顺序中断后其余 17 个工具也全部未注册，整个 entry 激活失败。
+- **机制（解包 `@deepseek-ai/dsh-tools` 源码实证）**：`tools.register(definition)` 先校验 `output` 必须是对象、`output.render` 必须是函数、`output.presentationMeta` 若存在必须是函数；随后 `assertSupportedJsonSchema(output.schema)` 校验 schema。execute 返回值还会在执行期按 `output.schema` 再做一次结构校验（`validateJsonSchemaValue`）。只写 `{ name, description, parameters, timeoutMs, execute }` 的旧式工具对象在当前版本会被整条拦下。
+- **schema 子集限制（`types/json-schema.js` 实证）**：允许的标量 type 只有 `object / array / string / number / integer / boolean / null`，**没有 `type: "json"`**；任意不约束的输出用空对象 `schema: {}`（annotation-only，等于任意可无损 JSON）。`parameters` 与 `output.schema` 是两套规范：插件直接 register 时参数扁平 map 可原样投影给模型，不强制编译成 `{type:"object",properties}`。
+- **render 契约**：`render(args, value)` 返回可无损 JSON 序列化的投影；标准文本块形态 `[{ type: "text", text: JSON.stringify(value) }]`；`presentationMeta(args, value)` 可选，返回独立的投影。
+- **正确做法**：在 `defineTool` 工厂层统一兜底——`schema: options.output?.schema ?? {}`、`render: options.output?.render ?? defaultRenderJson`（默认把结果序列化成 text 块）、可选 `presentationMeta`；个别工具要自定义精简渲染时再在 `options.output` 覆盖。不要 18 个工具各写一遍。
+- **离线先验**：写 `docs/_verify/output_contract_check.mjs`，mock `ctx.tools.register` 走真实插件 `apply()` 收集工具，再用解包的 `assertSupportedJsonSchema` 逐个校验 output 对象/render/presentationMeta/schema，并实跑一次默认 render 确认可序列化；重启 DSH 前先在命令行看到 18 个工具全 PASS，不要再靠重启碰运气。
+- **连带注意**：本轮只补 output；parameters 保持扁平 map，属于后续可选规范化项，不阻断激活。
+
+### 33. 系统提示里的工具清单要和注册工具名一一对应，漏写模型就不会调用（R14c，提示词一致性）
+- **现象**：18 个工具注册成功、启动无报错，但交付前核对发现系统提示 `GAUSSIAN_GUIDANCE` 的"工具列表"只手写了 13 个，4 个后处理工具（`postprocess_capabilities`/`create_postprocess_task`/`get_postprocess_task`/`list_postprocess_tasks`）没列进去；这类工具模型本来就不知道存在，不会主动调用。
+- **机制**：工具注册（`ctx.tools.register`）和系统提示片段（`ctx.systemPrompt.section`）是两条独立链路；框架不会自动把注册工具名拼进提示词。提示词里漏写只是"模型可见性"问题，不触发注册校验、不报错，所以静态契约自测抓不到，只能靠两个集合做差集才发现。
+- **正确做法**：离线自测在收集注册工具名后，解析系统提示文本里列出的工具名，求差集——缺哪个补哪个；以后新增、改名、删除工具时，同步改提示词清单。本插件把清单补齐到 18 个，仅改提示词文本、不动业务逻辑，重打 `lib/index.js` 后契约自测仍 18/18 PASS。
+- **通用沉淀**：这条已写进通用技能 `dsh-plugin-toolkit` Core Rules 第 10 条、6.3 第 6 条与坑位 K9，换任何 DSH 第三方插件都适用。

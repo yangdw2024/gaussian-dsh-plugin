@@ -1,0 +1,297 @@
+# gaussian-dsh-plugin 项目状态记录
+
+> 最后更新：2026-10-22（R16 修复工具 function schema：18 个工具 parameters 由扁平表编译为 `{type:"object", properties, required?}`，output.schema 统一为 annotation-only 任意 JSON；离线契约/shape/bundle/manifest 四项全 PASS，lib 已覆盖快照且哈希一致；后端零改动。对话内工具真实注册可见仍需完全退出重启 DSH、新开对话调用一次确认，属 L4 实机项）。R15b 实机闭环：状态卡改走 DSH host 同源代理后，当日完全退出重启 DSH，managed spawn→ready 与状态卡同源渲染链路实机 PASS——卡片「可用」、版本 0.2.0、后端 127.0.0.1:8765、Gaussian 路径/工作目录/内存核数/Sobko 字段齐全，bundles 未被摘除；剩余 external reuse、controlled dispose、orphan/dispose race、对话内 18 工具实际调用、retry 实机触发与化学链端到端待实机观察
+
+## 硬件环境
+- CPU: AMD Ryzen 7 9700X（8核16线程）
+- 内存: 15.1 GB（Gaussian 预算 12GB，后端 soft 1024MB / hard 1800MB）
+- OS: Windows
+- Gaussian 16: D:\G16W\g16.exe；formchk: D:\G16W\formchk.exe
+- Multiwfn 3.8: D:\Multiwfn\Multiwfn_3.8_bin_Win64\Multiwfn.exe
+- VMD 1.9.3: D:\VMD\vmd.exe
+- Python(base, D盘): D:\YDW\Trae_Gromacs\miniconda3\python.exe（3.13.13）
+
+## 当前版本
+- 插件/后端版本: 0.2.0（package.json 与 backend/app.py 一致）
+- 后端: FastAPI + uvicorn workers=1，端口 8765；service=gaussian-dsh-backend
+- 前端: esbuild → lib/（src/ 改动后必须 `node scripts/build.mjs` 重新打包，再把 lib/ 覆盖到 DSH profile 快照，快照非软链）
+- 打包产物: runtimes/win32-x64/gaussian-backend/（onedir，exe + _internal）+ runtime.json(sha256)
+- 后端 exe: `runtimes/win32-x64/gaussian-backend/gaussian-backend.exe`，17,657,746 字节，mtime 2026-10-21 15:12:48（含 R11 GJF 空行修复；本轮未改后端，无需重打）
+- 用户环境变量（User 级，永久）: `GAUSSIAN_BACKEND_MODE=managed`；`GAUSSIAN_BACKEND_EXE=<本插件 runtimes exe 绝对路径>`；`GAUSSIAN_BACKEND_URL` 未设（代码回退 http://127.0.0.1:8765）
+- DSH profile: `C:\Users\Administrator\.dsh\profiles\desktop\`；包快照 `node_modules\@gaussian\dsh-plugin-gaussian\`（复制副本）
+- 架构参考: `docs/DSH_ARCHITECTURE.md`（DSH Host/Client/Desktop 三平面、bundle 层序、装载链路、subprocess 契约、排障决策树）
+
+## 里程碑状态
+
+### M0 基础修复（完成，已验证）
+- [x] %NoSave/%Chk 顺序：%nosave 在 %chk 之前，chk 保留
+- [x] mem/nproc 走 settings.default_mem/default_nproc，不再硬编码
+- [x] ChemComputeScheduler（resource_scheduler.py）四者互斥，8 项测试通过
+- [x] /v1/health（ok/service/version/pid/instance_id/uptime/compute_lease/memory）
+- [x] /v1/admin/shutdown（managed token 校验，保留运行中 Gaussian 子进程）
+- [x] Sobko frozen fix：get_sobko_python_exe()，冻结用 SOBKO_PYTHON_EXE
+- [x] process_utils.py：spawn_subprocess / kill_process_tree / pid_alive(Windows tasklist)
+- [x] entrypoint.py；uvicorn workers=1；startup reconcile + ready record
+
+### M1 RDKit SMILES → Gaussian（完成，6 组测试通过）
+- [x] backend/smiles/：MolFromSmiles→canonical→电荷→多片段拒绝→手性告警→AddHs
+- [x] 保守推断 multiplicity（闭壳层 singlet / 单自由基 doublet；模糊组态抛 AmbiguousSpinError）
+- [x] ETKDGv3(numThreads=1) → MMFF94s 取收敛最低能构象；MMFF 缺参数不 fallback UFF
+- [x] REST: /v1/molecules/from-smiles、/v1/gaussian-inputs/from-smiles
+
+### M2 Multiwfn 后处理框架（核心完成）
+- [x] backend/postprocess/：models/gaussian_tools/multiwfn/manager/vmd；profiles/multiwfn-3.8.json 版本化菜单
+- [x] fchk_reader.py：直接解析 fchk，HOMO/LUMO/gap(eV) + MO 能级 SVG（CH3Cl.fchk 验证）
+- [x] /v1/postprocess/capabilities、POST/GET /v1/postprocess/tasks
+- [ ] 真实 Multiwfn spawn 跑 cube 导出未端到端（菜单数字待真实 smoke 后回填 profile）
+
+### M3 VMD headless（框架完成）
+- [x] templates/orbital.tcl、esp_surface.tcl、rdg.tcl（-dispdev text + TachyonInternal）
+- [x] vmd.py 三个渲染函数，TGA→PNG(Pillow)；VMD headless 启动 exit 0 已验证
+- [ ] 真实 cube 渲染 PNG 端到端未跑（examples 无现成 .cub）
+
+### M4 PyInstaller onedir 打包（完成，exe smoke 通过）
+- [x] packaging/gaussian-backend.spec（onedir，排除 Qt，收集 conda SSL DLL）
+- [x] scripts/build_backend.ps1（pathlib dist-info 临时改名→finally 还原，可逆零下载）
+- [x] scripts/deploy_runtime.ps1（复制到 runtimes + 生成 runtime.json sha256 清单）
+- [x] 实跑：exe 16.8MB，启动打 ready record，health 200，冻结环境 RDKit SMILES 可用，shutdown 受控退出
+- [x] 修复 postprocess manager 的 pydantic model_dump（原误用 dataclasses.asdict）
+
+### M5 Cordis managed lifecycle（完成，代码落地）
+- [x] src/index.js BackendManager：probe health→reuse(owned=false)；managed spawn→轮询 health
+- [x] ctx.inject(["subprocess"]) 启动；disposer 只 terminate owned，reuse 不动，Gaussian 子进程始终保留
+- [x] external 模式直连 baseUrl；找不到 exe/subprocess 优雅降级不崩
+- [x] 后端 ready record stdout JSON；health 校验 service 名防误认
+- 注：前端未在真实 DSH 环境联调（无 node_modules，未跑 esbuild）
+
+### M6 加固（完成，已验证）
+- [x] M6a memory_guard.py：psutil 后台采样 RSS，soft 告警/hard 拒绝新重计算，不杀进程
+- [x] M6b artifact_gc.py：cube 7天/图片30天/日志30天 TTL，绝不删 chk/fchk/gjf/json；startup + /v1/admin/gc
+- [x] M6c 原子数上限(GAUSSIAN_MAX_ATOMS=300) + 网格点数上限预检，超限 422
+- [x] M6d Windows pid_alive(tasklist) 统一；Multiwfn profile 主版本 fail-fast；超时走 kill_process_tree
+
+## 数据目录
+- 任务库: C:\Users\Administrator\.gaussian-dsh\jobs\；日志: ...\logs\；后处理: ...\postprocess\
+- Gaussian 工作目录: E:\YDW\ChemDatas\Gjf\（GC 不扫此目录，避免误删用户文件）
+
+## 时间线
+| 日期 | 事件 |
+|------|------|
+| 2026-10-20 | 项目逆推；M0 完成（%NoSave 顺序、scheduler、health、Sobko frozen） |
+| 2026-10-20 | M1 完成（RDKit SMILES→3D→Gaussian） |
+| 2026-10-20 | M2 完成（Multiwfn profile、fchk_reader、MO 图） |
+| 2026-10-20 | M3 完成（VMD headless 封装） |
+| 2026-10-20 | M5 完成（managed spawn/reuse/dispose、reconcile、ready record） |
+| 2026-10-20 | M6 完成（memory guard、artifact GC、大体系预检、pid_alive/版本 fail-fast） |
+| 2026-10-20 | M4 完成（onedir 打包，绕过 pathlib backport、排除 Qt、收 SSL DLL，exe smoke 通过） |
+| 2026-10-20 | 第二轮：首轮静态验收"需返工"9B/12M/3m 全部代码层修复，详见 FIX_REPORT_20261020.md；后端 24 py 编译通过、TestClient 回归通过、前端 lib 重打 |
+| 2026-10-21 | 第三至第十轮静态收口：N1–N12、R1–R10，PID 三态语义与 has_running 实例校验闭环（详见下文各轮记录） |
+| 2026-10-21 | 发布工程：冻结 v0.2.0 基线，重打 PyInstaller onedir 部署到 runtimes/；后端 exe smoke、health/status、admin 403、301 原子 422 拒绝通过 |
+| 2026-10-21 | R11 GJF 坐标块末尾空行归一化；R12a default 对象带 inject；R12b host name 与 client 模块 id 去重；R13a 包列入 bundles；R13b 删除 profile disabled 残留 |
+| 2026-10-21 | H2O B3LYP/6-31G(d,p) 单点实机跑通：Normal termination，E=−76.4196224301 Ha，Job 29d5fbd36387 completed |
+| 2026-10-21 | 完成 DSH 官方架构调研，落 `docs/DSH_ARCHITECTURE.md`；沉淀通用 `dsh-plugin-toolkit` Skill（安装/激活/排障 + 离线校验脚本 + 骨架模板） |
+| 2026-10-21 | 22:19 DSH 启动期 `ERR_CONNECTION_REFUSED` 崩溃，22:20 崩溃恢复把 aifs/gaussian 两个第三方 bundle 从 `dsh.profile.bundles` 批量摘除（dependencies 保留）；内置区激活待重启后复查（见下"当前实机状态"） |
+| 2026-10-21 | R14：18 个工具补 output 三要素声明（defineTool 统一兜底 schema={}+renderJson），离线契约自测 18/18 PASS；profile bundles 重新登记 gaussian；后端本轮未改动，无需重打 exe |
+| 2026-10-22 | R15：状态卡改走 host `connection` 同源代理（client 不再直连 8765，规避 `dsh-app://app` CORS 与后端未拉起 Failed to fetch）；包内 exe 自定位兜底 + runtime.json BOM 剥离；离线 shape/bundle/契约/manifest 全 PASS；当日完全退出重启 DSH，managed spawn→ready 与状态卡同源渲染实机 PASS（卡片可用、版本/地址/Gaussian 路径/工作目录/内存核数/Sobko 字段齐全，bundles 未被摘除）；reuse/dispose/orphan/race 与对话内工具调用待后续观察 |
+| 2026-10-22 | R16：对话内模型网关报 `Invalid schema for function 'create_postprocess_task': schema must be a JSON Schema of 'type: "object"', got 'type: null'`；根因是自研 defineTool 把扁平参数表直接透传，parameters 顶层无 `type:"object"`，18/18 工具全部中招（离线契约只校验 output.schema、漏检 parameters 结构）。修复：工厂内复刻官方 `parameterSchemaSpecToJsonSchema`/`valueSchemaSpecToJsonSchema` 最小子集，parameters 编译为 `{type:"object", properties, required?}`，output 缺省为 annotation-only 任意 JSON；离线契约脚本补 parameters object-root 硬断言与递归子集白名单；重打 lib、覆盖快照哈希一致，四项离线校验全 PASS；后端零改动、不重打 onedir。详见 `docs/R16_SCHEMA_FIX_20261022.md` |
+
+## 已验证
+- [x] 后端 24 个 py 文件全部 py_compile 通过；TestClient 综合回归通过
+- [x] 打包 exe：ready record、health(含 memory)、冻结 RDKit 乙醇/苯、postprocess 任务创建、shutdown token 403/受控退出
+- [x] formchk/Multiwfn/VMD 三个外部程序 capabilities 全部探测到（仅探测 exists，真实 spawn 端到端未跑）
+- [x] 301 原子 422 拒绝；GC dry_run 不删保护文件；base 环境 pathlib metadata 构建后完好还原
+- [x] 实机 H2O B3LYP/6-31G(d,p) 单点 Normal termination，completed，能量/HOMO/LUMO/偶极解析与日志字段一致（Job 29d5fbd36387）
+- [x] 离线校验：`verify_plugin_shape.mjs` Host 形状 PASS；`verify_profile_bundle.mjs` manifest 解析链 PASS（bundles 注册项受当前崩溃恢复回退影响，见"当前实机状态"）
+- [x] R15b 重启实机：managed spawn→ready、状态卡同源渲染、host snapshot + 后端摘要字段齐全（2026-10-22 截图确认，见 R15 小节）
+- [x] R16 离线：18/18 工具 parameters 为 object-root（type=object、properties 齐全、required 键命中），output.schema 通过子集白名单；`output_contract_check` / `verify_plugin_shape` / `verify_profile_bundle` / 技能 `verify_plugin_manifest` 四项全 PASS；lib 与 profile 快照 SHA256 一致；后端 compileall 0 错、源码 mtime 未变
+- [ ] 未验证：DSH managed 剩余生命周期（external reuse / controlled dispose / orphan / dispose-race）、对话内 18 工具实际调用（R16 修复后需完全退出重启 DSH、新开对话实调一次确认）、Multiwfn 真实 cube 导出、VMD 真实 PNG、Sobko server、reconcile 实机接管、stop 运行中任务窗口（见待办）
+
+## 第二轮返工修复（2026-10-20，首轮静态验收后）
+
+首轮评审 9 Blocker / 12 Major / 3 Minor 已全部在代码层闭环，逐条对照见 `FIX_REPORT_20261020.md`。
+
+- [x] B1 统一 lease（Gaussian/RDKit 原子获取）、B5 标准 logger、B6 管理端点强制认证+CORS 收紧
+- [x] B7 提交边界 validate_gjf（原子数/%mem/%nproc/电荷多重度）、B8 MP2/CC 能量+科学计数、B9 stop_job 复核 PID
+- [x] M1 统一 Normal termination 判据、M2 prepared 状态、M3 前端后处理工具、M4 真读 Multiwfn banner
+- [x] M5 cube header 复核钩子、M6 产物落 data_dir、M7 Sobko 读线程真超时、M8 VMD 产物校验
+- [x] M9 开壳层 α/β 双栏、M10 最后一组轨道、M11 disposed 竞态、M12 stdio ignore
+- [x] m1 版本 0.2.0、m2 client baseUrl 可配置、m3 one-file 开关拒绝+缺 exe 失败退出
+- 本地验证：24 py 编译 0 错、esbuild bundle 通过、TestClient 回归通过、专项单测通过
+- [ ] 待部署：源码改完需重打 PyInstaller onedir（当前 runtimes exe 为旧版）
+
+### 第二轮评审后第三轮返工（2026-10-20，N1–N12 代码层修复完成）
+- [x] N1 前端 stdio 改 inherit（DSH 枚举合法，弃用 ignore）；B4 cwd 兜底 tmpdir 始终字符串
+- [x] N2 lease 事务边界：Popen 前失败释放、Popen 成功（含 save 失败）保留 lease；N4 %Chk 大小写不敏感规范化
+- [x] N3 mem 单位全识别（GB/MB/KB + W/KW/MW/GW/TW=8B/word）、未知 fail-closed、原子序数坐标、多段 mem 取 max
+- [x] N5 CCSD 正则补左括号、MP2 D 指数归一、occ/virt 配对取 LUMO
+- [x] N6 RDKit 前置 hard guard + Embed 前原子数；N8 stop_job 错误变量；N11 log_tail≤0 空 + 有界尾读；N12 CORS 正则放行回环端口
+- [x] N7 spawn 即登记 ownership、_shutdownHandle 真清理、waitForExit 返回值判断；N9 Sobko 按 id 匹配+超时重建+帧上限；N10 同路径日志合并 STDOUT
+- [x] 补强：B2 诚实注释不杀树、B9 PID 创建时间 best-effort、M4 真 probe_version、M5 cube 复核钩子、M8 TGA 魔数、M9 beta 通道判定、M1 reconcile 统一判据
+- 本地验证：24 py 编译 0 错、esbuild+node --check 通过、TestClient 回归通过、N3/N5 纯函数与正则自验通过
+- [ ] 待部署：同上，源码改完需重打 onedir（非代码缺陷）
+
+### 第三轮评审后第四轮返工（2026-10-20，R1–R9 代码层修复完成，待静态复验）
+- [x] R1 %Chk：全文替换所有 %chk 行；Link0 重排 其他→%nosave→%chk，保证 nosave 在 chk 前不被删
+- [x] R2 多 SCF 轨道：finditer 按位置取末 occ 块之后的 virt，首根=LUMO，不再全局下标错配
+- [x] R3 cube：读 3/4/5 行首字段 nx/ny/nz，非法 header 直接 raise（去掉 -1 放行）
+- [x] R4 终止判据：尾读 400 行取最后一个 termination event，Error 在末个 Normal 之后判 failed
+- [x] R5 持久化：Popen 前先落 pending JSON，running 保存失败仍可被 reconcile 按 pid 接管
+- [x] R6 shutdown：不限 ready，先 probe 探活再受控 shutdown；未确认退出保留 handle 标 orphan
+- [x] R7 Sobko：expected_id 非空仅接受 id 精确匹配，通知/错 id 帧丢弃，未成形缓冲 50MB 上限
+- [x] R8 多段 nproc 取 max，任一段超核即拒绝；R9 独立 stderr 句柄并入 finally 统一关闭
+- 本地验证：24 py 编译 0 错、esbuild+node --check、TestClient（health/capabilities/403）、R1/R2/R3/R4/R7/R8 隔离自验通过
+- [ ] 待静态复验：提交 acceptance_bundle.zip 给评审 AI 复核 R1–R9
+
+### 第四轮评审后第五轮收口（2026-10-20，R1/R2/R5/R6 代码层修复完成，待静态复验）
+- [x] R2 LUMO 取末 occ 后第一块 virt 首根（following[0]），不再取最后一块
+- [x] R5 Popen 失败落 .recover.json，reconcile 补齐/重建接管，has_running 内存句柄兜底
+- [x] R1 按 --Link1-- 分段局部保序，不搬 %RWF/%mem，第二段也保 nosave 在 chk 前
+- [x] R6 已有 own/orphan handle 时 probe 不降级 owned=false，保持所有权
+- 本地验证：24 py 编译 0 错、esbuild+node --check、TestClient（health 200/capabilities 200/403）、R2/R1/R5 隔离自验通过
+- [ ] 待静态复验：提交 acceptance_bundle.zip 复核 R1/R2/R5/R6 + 已闭环项回归
+
+### 第五轮评审后第六轮收口（2026-10-21，R5a/R5b/R5c/R7/R6 代码层修复完成，待静态复验）
+- [x] R5a Popen 成功存内存 `_running_jobs`，新增 `_reap_ram_jobs()` 在进程退出时统一 finalize+释放 lease
+- [x] R5b `list_jobs` 排除 `*.recover.json`，同 job 不重复枚举
+- [x] R5c `_write_pid_recover` 返回 bool，都失败时如实标注不可重启接管
+- [x] R7 Sobko 50MB 超限改为锁内置标志、锁外再 `_kill()`，消除 Lock 重入死锁
+- [x] R6 dispose 先 shutdown，仅 exited===true 才清 owned，orphan 保持 owned=true
+- 本地验证：24 py 编译 0 错、esbuild+node --check、TestClient（200/200/403）、R5a reap/R5b 去重/R7/R6 隔离自验通过
+- [ ] 待静态复验：提交 acceptance_bundle.zip 复核 R5a/R5b/R5c/R7/R6 + 已闭环项回归
+
+### 第六轮评审后第七轮收口（2026-10-21，R5a 状态机合流/R2 跨步回退/Sobko init/R9/R6，待静态复验）
+- [x] R5a-1 stop_job 接入内存 `_running_jobs`，停止成功后 pop 内存/processes、清 recover
+- [x] R5a-2 reap 以 `trust_handle=True` 信任 Popen 退出事实，仅 finalize 成功才清凭据，防 PID 复用漏 lease
+- [x] R2 最终 SCF 无 virt 时 LUMO 置 None，不再回退前一 SCF
+- [x] Sobko initialize 取 init_id 并传 expected_id，通知帧不被当响应
+- [x] R9 打开句柄与 Popen 包进同一 try/finally，open 异常也关闭已开句柄
+- [x] R6 `_controlledStop` 确认退出后同步 owned=false
+- 本地验证：24 py 编译 0 错、esbuild+node --check、TestClient（200/200/403）、R2 无 virt→None/R9 句柄关闭隔离自验通过
+- [ ] 待静态复验：提交 acceptance_bundle.zip 复核 R5a-1/R5a-2/R2/Sobko-init/R9/R6
+
+### 第七轮"有条件交付"后第八轮收尾（2026-10-21，待静态复验）
+- [x] R8a reconcile：终态主记录永不被 stale recover 复活，recover 只补 pending/running 缺 pid
+- [x] R8b `_adopt_or_finalize` 用 `pid_is_same_instance` 校验 PID 实例，复用时按已结束 finalize、不重占 lease
+- [x] R8c `_waitReady` disposed 分支复用 `_controlledStop`，确认退出后同步 owned
+- 本地验证：24 py 编译 0 错、esbuild+node --check、TestClient（200/403）、R8a/R8b 隔离自验（不复活、不接管、不 acquire）
+- [ ] 待静态复验：提交 acceptance_bundle.zip 复核 R8a/R8b/R8c
+
+### 第八轮后第九轮：PID 实例三态语义收口（2026-10-21，待静态复验）
+- [x] R9a `_adopt_or_finalize` 区分三态：None(不可判定) 保守视为运行、adopt+acquire，不再误判结束
+- [x] R9b `_finalize_if_dead` 对 adopted job 后续轮询也做实例校验，仅明确 False 才落终态释放 lease
+- 本地验证：24 py 编译 0 错、TestClient（200/403）、三态隔离自验（None→运行/False→结束/True→接管）
+- [ ] 待静态复验：提交 acceptance_bundle.zip 复核 R9a/R9b
+
+### 第九轮后第十轮：has_running 复用实例三态（2026-10-21，静态闭环）
+- [x] R10 `has_running()` 删除裸 `pid_alive()` 短路，统一走 `_finalize_if_dead()`，PID 复用时正确落终态释放 lease
+- 本地验证：编译 0 错、TestClient（200/403）、三态隔离（False→落终态/True→占用/None→保守占用）
+
+### 第十轮后发布工程与 DSH 激活收口（2026-10-21）
+
+#### 阶段 1–2：基线冻结与重打 onedir
+- [x] 冻结 v0.2.0 基线：非 git 仓库，以 acceptance_bundle.zip 为源码快照；Python 3.13.13（D 盘 miniconda3）、PyInstaller 6.21.0、Windows x64
+- [x] 按 `scripts/build_backend.ps1` → `scripts/deploy_runtime.ps1` 重打 onedir，部署到 `runtimes/win32-x64/gaussian-backend/`，runtime.json SHA256 清单已生成；未复用旧 runtime
+- [x] one-file 未实现（设计如此，非缺陷，不擅自实现）
+
+#### R11 GJF 坐标块末尾空行（实机 smoke 暴露，已闭环）
+- [x] 原 `_normalize_chk` 用 splitlines+join 吞掉坐标块后空行，Gaussian L101 报 `End of file in ZSymb`；改为写盘前 `content.rstrip("\n") + "\n\n"`（坐标块后一个空行结束，以 Gaussian 实际接受的规范为准）
+
+#### R12 DSH 插件对象与模块 id（前端激活，已闭环）
+- [x] R12a：`export default { name, inject, apply }`；Cordis loader 取 `module.default` 读 `inject`，只写 named `export const inject` 会被忽略（修掉 `cannot get property "tools" without inject`）
+- [x] R12b：client 模块 id 改为完整包名 `@gaussian/dsh-plugin-gaussian`，与 host 内部 `name="gaussian-dsh"` 区分（修掉 web boot `duplicate factory registration`）
+- [x] `scripts/verify_plugin_shape.mjs` 按 `ns.default ?? ns` 断言插件对象带 inject/apply/name，离线 PASS
+
+#### R13 bundle 注册与 disabled 残留（内置区卡片根因，已落盘；2026-10-22 重启确认 bundles 在位、无 disabled 残留）
+- [x] R13a：包必须列入 profile `package.json` 的 `dsh.profile.bundles`；只进 dependencies 时自带 `cordis.patch.yml` 不进 host loader，client-modules 扫描不到 client 半侧
+- [x] R13b：清理 profile `cordis.patch.yml` 残留 `- id: gaussian / disabled: true`（user layer 最后叠加会关掉 entry）
+- [x] 改前备份 `docs/backups_20261021_rework11/`（profile_package.json、profile_cordis.patch.yml、src/lib 快照）
+- [x] `scripts/verify_profile_bundle.mjs` 离线校验 bundles 注册、无 disabled、manifest 解析链完整，对 aifs 对照 PASS
+
+#### R14 工具 output 三要素声明（2026-10-21，离线闭环 18/18；对话内注册可见性待新开对话调用确认）
+- **暴露现象**：R13 重启后内置区已出现"Gaussian 计算助手"卡片，但启动期黄条报错 `tool "gaussian_status" must declare output { schema, render, presentationMeta? }`；entry 在第一个工具处中断，18 个工具全部未注册。
+- **根因（解包 `@deepseek-ai/dsh-tools` 实证）**：`defineTool` 旧版只产出 `{ name, description, parameters, timeoutMs, execute }`，缺新版强制要求的 `output` 对象；`tools.register` 校验 output 必须是对象、`render` 必须是函数、`presentationMeta` 若存在必须是函数，随后 `assertSupportedJsonSchema(output.schema)` 校验结构。
+- **修复（最小改动，不动业务逻辑）**：`src/index.js` 的 `defineTool` 内新增 `defaultRenderJson`（返回 `[{type:"text",text:JSON.stringify(value)}]`），统一兜底 `output = { schema: options.output?.schema ?? {}, render: options.output?.render ?? defaultRenderJson, ...(presentationMeta 为函数时带上) }`；18 个工具 options 逐个无需改动，将来需要自定义 render 可在 `options.output` 覆盖。
+- **构建与同步**：`node scripts/build.mjs` 重打 `lib/index.js`（35,104 B，R14 契约修复后 35,007 B、旧 34,581 B）；`lib/client.js`（6,005 B）本轮未变；两个文件覆盖到 DSH profile 快照（pnpm 复制快照、非软链），`node --check` exit 0，根目录与快照 SHA256 一致。
+- **R14c 提示词对齐**：交付前核对发现系统提示 `GAUSSIAN_GUIDANCE` 的"工具列表"只列了 13 个、漏列 4 个后处理工具（`postprocess_capabilities`/`create_postprocess_task`/`get_postprocess_task`/`list_postprocess_tasks`，另 `generate_gaussian_input_from_smiles` 已在列）；已补齐到 18 个，仅改提示词文本、不动业务逻辑；改前备份 `docs/backups_20261021_rework12/src_index.js.bak_20261021-r14b`。
+- **离线自测**：`docs/_verify/output_contract_check.mjs` 设 `GAUSSIAN_BACKEND_MODE=external`，import 打包后 `lib/index.js`，mock `ctx.tools.register/systemPrompt.section/effect/inject`，走真实 `plugin.default.apply(ctx)` 收集 18 个工具，复用解包 dsh-tools 的 `assertSupportedJsonSchema` 复刻 register 校验；18/18 CONTRACT PASS。
+- **bundles 重登记**：崩溃恢复后 gaussian 已被摘出 `dsh.profile.bundles`；改前备份 `package.json.bak-20261021-r14`、`cordis.patch.yml.bak-20261021-r14`；用 `docs/_verify/reconcile_bundles.mjs` 把 `@gaussian/dsh-plugin-gaussian` 追加回 bundles（内置 base/web-app 保留在前），不改动 aifs/autorest。
+- **回归**：24 个后端 py `py_compile` 0 错（本轮未改后端，无需重打 exe）；`verify_plugin_shape.mjs` PASS；`verify_profile_bundle.mjs` PASS；toolkit 通用 `verify_plugin_manifest.mjs` PASS。
+- **schema 子集备忘**：允许 type 仅 `object/array/string/number/integer/boolean/null`，无 `type:"json"`；不约束输出用空对象 `schema:{}`；parameters 扁平 map 本轮保持原样（后续可选规范化，不阻断激活）。**勘误（R16 复核后推翻上面这句）**：`parameters` 并非可保持扁平——模型网关强制其为 `{type:"object", properties, required?}` object root，扁平表会被 `type: null` 拒绝；已于 R16 编译修复，见本节 R16 小节、`LESSONS_LEARNED.md` 第 36 条与 `docs/R16_SCHEMA_FIX_20261022.md`。
+
+#### R15 状态卡走 host 同源代理（2026-10-22，离线闭环 + 当日重启实机确认启动态与状态卡）
+- **暴露现象**：R13/R14 重启后详情页标题「Gaussian 计算助手」与描述已渲染（client 半侧激活、bundles 注册、UI 链路通），但状态区卡在「正在读取服务状态…」并红字 `TypeError: Failed to fetch`，按钮「重试连接」；对照范本 aifs 状态可用、版本/数据目录/日志/地址/重试按钮齐全。
+- **根因（解包 `E:\DSH\resources\app.asar` 实证，非凭印象）**：
+  1. `src/client.js` 在浏览器 renderer 直接 `fetch("http://127.0.0.1:8765/v1/status")`；host 只 inject 了 subprocess，未 inject `connection`、未注册任何 `/api/gaussian/*` 同源路由。后端未拉起即报 Failed to fetch；即便拉起，renderer origin 为 `dsh-app://app`，不在后端 CORS 正则内也会被浏览器拦截。状态卡因此拿不到 host 真实 state/error/owned/orphan 快照，也无法触发 host retry/spawn。
+  2. exe 定位只依赖 `process.env.GAUSSIAN_BACKEND_EXE`；host 进程环境块若没继承到该变量 → backendExe=null → state=failed「未找到 exe」。其余 spawn 失败分支（无 subprocess 服务 / spawn 后崩溃 / `_waitReady` 超时）需真实重启 DSH 后按 `manager.error` 归类，本轮不预设结论。
+- **官方契约核验（asar 实证）**：`@deepseek-ai/dsh-client-connection` 的 `HostConnectionService` 服务名 `super(ctx,"connection")`；`this.fetch={register:(route)=>this.registerFetchRoute(owner,route)}`；强制 path 以 `/api` 前缀、methods 非空不重复、按 `url.pathname` 精确匹配；host 在 webServer 注册 `/api` 总路由，renderer 相对路径 `/api/xxx` 同源分发、无跨域；`registerFetchRoute` 返回注销函数。aifs 顶层 `inject=["tools","systemPrompt"]`，connection/subprocess 均走子 `ctx.inject([...])` 注册，本插件照搬同一架构。
+- **修复（最小改动，照搬 aifs 官方架构，不动后端状态机与业务逻辑）**：
+  - `src/index.js`：新增包内 `packagedExecutable()` 自定位——环境变量 `GAUSSIAN_BACKEND_EXE` 存在且文件存在才优先用；否则读包内 `runtimes/<platform>-<arch>/runtime.json`，校验 `target/version` 与 executable 自身 sha256（拒绝绝对路径与 `..` 越界），任一不符/缺失/异常返回 null；最后才兜底 null。`BackendManager.snapshot()` 返回 `{state,version,mode,owned,ready,baseUrl,dataDir,error,backend}`，仅 `state==="ready"` 才拉后端 `/v1/status` 摘要；`apply` 内 `ctx.inject(["connection"])` 注册 `GET /api/gaussian/status`（返回 snapshot），managed 模式另注册 `POST /api/gaussian/retry`（幂等 `manager.start(subprocessService)` 后返回 snapshot）；disposer 依次注销两条路由。
+  - `src/client.js`：删除直连 `backendBase()`，改走同源 `/api/gaussian/status`、`/api/gaussian/retry`；新增 `stateLabel(state)` 映射 idle/external/reused/starting/ready/failed/stopped/orphan 中文；rows 先展示 host 状态/版本/地址/数据目录，ready 后追加后端 Gaussian 路径/可用/工作目录/默认内存/核数/Sobko 配置/模式/运行中任务与 `sobko.start_error`，再回填 `status.error`；空值显示 `—`。
+  - `scripts/build.mjs`：external 补 `node:url`、`node:crypto`。
+- **离线过程中复现并修掉的缺陷**：快照 `runtime.json` 带 UTF-8 BOM，Python 用 `utf-8-sig` 能读，Node `JSON.parse(readFileSync(mp,"utf8"))` 在首字符 BOM 处直接抛 `Unexpected token '﻿'`，会让包内自定位 catch 返回 null；已在解析前 `.replace(/^\uFEFF/,"")` 剥离 BOM，源码两处字面 U+FEFF 规范化为显式转义、写回 UTF-8 无 BOM。
+- **离线验证**：`node scripts/build.mjs` 成功（`lib/index.js` 37.8kb、`lib/client.js` 7.1kb）；快照覆盖后 `node --check` 双 0 错、源与快照 SHA256 match=True；`verify_plugin_shape.mjs` PASS、`verify_profile_bundle.mjs` PASS、`output_contract_check.mjs` 18/18 PASS、通用 `verify_plugin_manifest.mjs` PASS；快照内含 `runtimes/win32-x64/runtime.json`（version 0.2.0、target win32-x64、executable 清单 2055 条），exe 17,657,746 B、sha256 与清单 match=True；离线复刻 `packagedExecutable()` 对快照 `metaUrl` 解析成功，返回真实 exe 绝对路径且 exists=true。
+- **字段对齐**：后端 `/v1/status` 返回 `gaussian{exe,exists}/work_dir/data_dir/default_mem/default_nproc/sobko{configured,project_dir,run_script_exists,mode,running,start_error}/running_job/compute_lease`；client 映射字段逐一核对一致；snapshot.dataDir 兜底 `~/.gaussian-dsh`（与后端 config 默认一致），非 ready 时卡片也显示数据目录。
+- **本轮未改后端**：R15 只改前端与 host Node 侧，现有 onedir exe 含 R11，后端业务逻辑无改动，无需重打 onedir。
+- **本轮收尾实测（2026-10-22，发布工程阶段）**：
+  - [x] onedir exe 基础 smoke：`scripts/smoke_test_backend.ps1` 独立端口 8799 拉起 exe（PID 23712），7s 内 `/v1/health` 200，service=gaussian-dsh-backend、version=0.2.0、instance_id=0fd909be92b0；`/v1/postprocess/capabilities` 返回 formchk/multiwfn/vmd.exists 均 True；带 token `/v1/admin/shutdown` 受控退出，进程结束、8799 释放，stdout/stderr 无 traceback，临时日志已清理。
+  - [x] 离线 TestClient 回归（`docs/_verify/backend_offline_smoke.py`，临时目录、`GC_ON_STARTUP=0`、不常驻）6/6 PASS：health 200 ok=True/service/version；status 200 字段 missing=[]、gaussian_exists=True；capabilities 200；匿名 admin shutdown 403；非法 GJF（无电荷/多重度行）返回 200 + `{ok:false}` 未拉起进程；jobs 列表 200。
+  - [x] 后端 `compileall` 全量 0 错；前端 `node scripts/build.mjs` 幂等重打，源 lib 与快照 SHA256 一致、`node --check` 双 0 错；四项离线校验（shape / profile bundle / 18 工具契约 / toolkit manifest）全 PASS。
+  - [x] 交付包由 `scripts/make_acceptance_bundle.ps1` 重打：51 条目、未压缩 486,805 B、zip 约 206 KB、leak=0（精确字节以脚本输出为准）；verifier `zip-check-entries` 9/9 必含条目命中、missing=[]；README 占位符 0 命中（其余 md 命中项经核对均为代码/路径省略号误报）。
+  - [ ] 观察项（历史既有、非 R15 引入，不阻断）：Multiwfn 版本探测 `subprocess.run(text=True)` 在 UTF-8 环境按 utf-8 解码 GBK 字节，后台读取线程刷 `UnicodeDecodeError`，外层 `except` 已兜底回退 None；建议后端改版时加 `encoding="utf-8", errors="ignore"`。
+- **2026-10-22 重启 DSH 实机确认（截图为证，L4 启动态链路 PASS）**：完全退出 DSH 再启动后，状态卡「可用」、版本 0.2.0、后端地址 `http://127.0.0.1:8765`、数据目录 `C:\Users\Administrator\.gaussian-dsh`、Gaussian 路径 `D:\G16W\g16.exe` 可用 √、工作目录 `E:\YDW\ChemDatas\Gjf`、默认内存 12GB / 核数 8、Sobko `bm25_only`、运行中任务「否」、重试启动按钮在位。据此判定 managed spawn→health ready、connection 同源路由、client 渲染 host snapshot + 后端摘要这条启动态链路实机闭环。
+- **R15b 文档回填与交付包重打（2026-10-22，仅改文档、未动 src/backend）**：本轮把实机结论回填 STATUS / RELEASE / PLAN / LESSONS / DSH_ARCHITECTURE / R15 诊断 / README 与系统资产清单，分层验收工作流沉淀进通用技能 `dsh-plugin-toolkit`（Core Rules 12 条、4.5 节四层证据与 10 步顺序、坑位 K12）；回归 `node --check` 双 0 错、18 工具契约 18/18、shape / profile bundle / toolkit manifest PASS、后端 compileall 0 错、源/快照 SHA256 一致；交付包重打为 51 条目、未压缩约 485 KB、zip 约 210 KB（精确字节以打包脚本输出为准）、leak=0，verifier 格式 PASS、12/12 必含条目命中、README 占位符 0；独立解压显式 UTF-8 回读确认包内五份核心文档均为 R15b 最新结论。
+- **R16 工具 function schema 修复（2026-10-22，仅前端工具注册层，后端零改动）**：
+  - 现象：对话内模型网关报 `Invalid schema for function 'create_postprocess_task': schema must be a JSON Schema of 'type: "object"', got 'type: null'`（request_id `cc9541df-625a-4e11-9154-b82789fee997`）。
+  - 根因：自研 `defineTool` 把作者侧扁平参数表 `{ kind: {type:"string", required:true}, ... }` 直接透传给模型层；OpenAI/DeepSeek function 规范要求 `parameters` 顶层为 `{type:"object", properties, required?}`，扁平表顶层无 `type`，被网关解析成 `type:null` 拒绝。离线实跑（`docs/_verify/schema_inspect.mjs`）证实 **18/18 工具 parameters 全部扁平、output.schema 全部缺顶层类型**；旧离线契约只校验 `output.schema` 子集合法性，漏检 parameters 结构，故离线 18/18 PASS 而对话内被拒。报错文案不在本地 `app.asar`，属模型提供商/网关/SDK 校验层。
+  - 修复：工厂内复刻 dsh-tools 官方 `parameterSchemaSpecToJsonSchema` / `valueSchemaSpecToJsonSchema` 最小子集（不引入运行时 `@deepseek-ai/*` 依赖，对齐范本 aifs 内联写法）：`compileParameterSchema` 产出 `{type:"object", properties, required?}`（仅 `required===true` 入 required 数组，保留 type/description/default/enum/items 递归）；`compileOutputSchema` 缺省为 annotation-only 任意 JSON（官方 `type:"json"` 产物形态）。
+  - 离线加固：`docs/_verify/output_contract_check.mjs` 新增 parameters object-root 硬断言（type=object、properties 对象、required 键命中 properties）+ 递归子集白名单；官方解包校验器缺宿主作用域包时自动降级内联校验，不再中断自测。
+  - 回归：`node scripts/build.mjs` 重打 `lib/index.js`（40,108 B，SHA256 前 16 位 `6924F73A08DAAACF`）、`lib/client.js`（7,376 B，SHA256 前 16 位 `B8A38D8D28F5A97A`）；`node --check` 双 0 错；schema_inspect 18/18 parameters.type=object、output.schema 合法；契约 18/18 PASS；shape / profile bundle / toolkit manifest 全 PASS；源 lib 与 profile 快照 SHA256 一致；后端 `compileall` 0 错、源码 mtime 未变，不重打 onedir。
+  - 边界：本轮未在 execute 前补前端入参强校验（后端 Pydantic 已做边界校验，属增强项）；对话内工具真实注册可见仍需完全退出重启 DSH、新开对话实调一次确认（L4）。规划与证据见 `docs/R16_SCHEMA_FIX_20261022.md`。
+- **R17 运行期排障：shell 0xC0000142 与 gaussian disabled 配置（2026-10-22，取证闭环、配置已改待重启验证）**：
+  - **两件独立故障分开定性**：① web profile 会话一次性 shell 命令全部退出 `3221225794`（0xC0000142 = STATUS_DLL_INIT_FAILED，加载器 DLL 初始化失败），文件读取工具可用、模型可响应；② desktop profile 的 gaussian 被 `cordis.patch.yml` 末尾 `- id: gaussian / disabled: true` 关闭，aifs/autorest 在 dependencies 但不在 bundles。
+  - **故障 A 责任归属（与 gaussian 插件无因果）**：web profile `dependencies={}`、bundles 仅 base/web-app，未加载任何第三方插件；gaussian 后端是独立 FastAPI 子进程、当前未启动、8765 空闲；快照 `lib/index.js`=`6924F73A08DAAACF`、`lib/client.js`=`B8A38D8D28F5A97A` 与 R16 终态源码 SHA256 一致，后端 exe `0C28301E10C45E95` 17,657,746 B、runtime.json 在位。
+  - **源码链已排除项**：`dsh-tool-pwsh → dsh-pwsh-local → ctx.shell → dsh-subprocess-local runner bootstrap → dsh-win32-process koffi CreateProcessW`；已排除环境裁剪、可执行文件缺失、Job 内存/进程数上限、环境变量缺失、cwd 不存在、运行中第三方杀软、待重启标记。**受限 token 改为待核对**：profile bundles 为空 ≠ 会话档位非受限，read-only/workspace-write 由会话选择器独立决定。
+  - **联网佐证（2026-10-22 晚）**：官方包 `@deepseek-ai/dsh-sandbox-windows-acl` README 载明受限令牌下 `CREATE_NO_WINDOW`/`CREATE_NEW_CONSOLE` 子进程在 DLL 初始化阶段死亡即报 0xC0000142，两种受限模式 pwsh 进 ConstrainedLanguage，`danger-full-access` 不套沙箱；社区问题库（dsh-ai.com FAQ，2026-10-13）#10010/#9621/#9858/#9682/#9507/#8721/#8485/#8395/#8784/#6930 多条同类 Windows 复现。首要候选=会话级受限沙箱档位；Node 原生 spawn 本机健康 ≠ koffi/受限令牌链路健康，失败分层（runner bootstrap 自身 vs 目标 powershell.exe）需在 DSH 内实机抓证据。详见 `docs/R17_DIAGNOSIS_20261022.md` 第 3 节。
+  - **故障 B 修复（2026-10-22 晚已落盘，待重启验证）**：源码 `writePluginEnabled`（plugin-manager `:1032–1080`）实证——开启时若覆盖项只含 id+disabled 且合并结果默认启用，官方规范化动作是整条删除，而非保留 `disabled: false`；故按官方结果删除 gaussian 覆盖条目。已备份 `package.json.bak-20261022-r17`（未改动，哈希 `aa9583a8642b394d`）、`cordis.patch.yml.bak-20261022-r17`；YAML/JSON 解析合法、4 条原配置完好、无 disabled 残留，toolkit manifest 离线校验 PASS；aifs/autorest 是否补回 bundles 仍待决策。
+  - **故障 C（R17c，重启后 bundles 被单独摘除，2026-10-22 晚取证 + 修复落盘，待重启观察）**：用户重启 DSH 后磁盘复核，dependencies 三项保留而 `dsh.profile.bundles` 只剩 base/web-app，gaussian 被摘除；patch.yml 时间戳未变、未被改名备份。源码定位：`selectBundle(false)`（plugin-manager `lib/index.js:2280–2305`）只从 bundles 数组过滤目标名、`saveManifest` 回写，不碰 patch 与 dependencies，与现场完全吻合；已排除 `reconcile()` manifest 缺失过滤（快照 `dsh.bundle.patch` 声明完整）、`listBundles()` 兼容性展示只读不回写、崩溃恢复 `disableAllPlugins()`（会先 rename patch，现场未发生）。备份摘除后状态 `package.json.bak-20261022-r17c`（471 B，`BA2DA23659DD8036`），bundles 补回 gaussian 第三项；JSON 解析、双侧断言、toolkit 离线校验 PASS；快照 lib 与后端 exe 哈希复核为 R16 终态。触发者归属（面板误关 vs 管理工具调用 vs UI 状态回写）证据不足，renderer leveldb 未读，不下定论。详见诊断文档 4.5 / 5.3。
+  - **故障 A 本机前置复测（2026-10-22 晚）**：pwsh 7 三个安装路径均不存在，`where.exe pwsh` 命中 Doubao 沙箱自带件、非系统安装，DSH 设计内回退 System32 5.1 属预期；系统 `powershell.exe` 5.1（10.0.19041.1）与 `cmd.exe` 绝对路径独立启动 `echo hello` 均 exitCode=0，排除系统 shell 本体损坏；`SystemRoot/ComSpec/windir` 正常；PSModulePath 第一项未展开字面量列为次要观察项。
+  - **冻结边界**：gaussian 源码、后端 exe、runtime.json、R16 终态交付包全程未改动；profile 仅两处磁盘配置改动——删除 patch 中 gaussian disabled 覆盖条目、bundles 数组补回 gaussian 一条。
+  - [ ] 待重启验证：完全退出 DSH（托盘 + 任务管理器确认进程结束）→ 重启进 desktop profile → 先复查 `package.json` bundles 是否再次只剩官方两条（4.5 待观察项，若再被摘需继续追自动回写路径），再确认内置区 gaussian 卡片与对话内工具恢复；web profile 无 gaussian，不在 web 验证。
+  - [ ] 待实机观察：重启后 desktop 会话 shell 是否仍复现 0xC0000142；复现先核对会话权限档位（read-only/workspace-write/danger-full-access），做 danger-full-access 对照实验，再按诊断文档 5.2 分层抓 runner/目标进程证据，不在插件源码内改动。
+- **仍待实机观察（NOT RUN，不写成 PASS）**：external reuse→owned=false；controlled dispose 仅 `waitForExit()===true` 才清 ownership；orphan 保留 handle；dispose/start race 走 controlled stop；18 个工具在对话内注册可见并可实际调用（R16 修复后重启 DSH 新开对话验证）；retry 按钮触发 host 幂等 start；重启后 bundles 长期稳定（若再次只剩官方两条，先按诊断 4.5 区分 `selectBundle(false)` 摘除与崩溃恢复 `disableAllPlugins()` 两条路径，再继续追自动回写来源）。
+
+#### 实机 Gaussian 单点（H2O，Normal termination 通过）
+- [x] 任务 `29d5fbd36387`，B3LYP/6-31G(d,p) 单点，pid 12976，status=completed，Elapsed 1.8s，`Normal termination of Gaussian 16`
+- [x] 产物：`E:\YDW\ChemDatas\Gjf\water_B3LYP_631Gdp_sp_29d5fbd36387.gjf/.log/.chk`（log 12,964 B，chk 667,648 B）
+- [x] 解析结果：E(RB3LYP)=−76.4196224301 Ha；HOMO −0.29228 Ha（−7.953 eV，B1 轨道 5）；LUMO +0.06755 Ha（+1.838 eV）；gap 0.35983 Ha（9.792 eV）；偶极 2.0298 D；1-A1 闭壳层，5 占据轨道、25 基函数
+- [x] 后端基础 smoke：`/v1/health` 200、`/v1/status`/`/v1/jobs` 200、admin shutdown 匿名 403、301 原子 GJF 422 拒绝
+- [ ] 注：本次为固定实验构型单点，未做几何优化；几何优化另跑
+
+#### 当前实机状态（2026-10-22 R15b 重启确认后，以磁盘为准）
+- [x] R14 修复前：22:19:55 DSH 启动期 `net::ERR_CONNECTION_REFUSED` 崩溃（启动期本地端口未就绪，非插件代码问题）；22:20:53 崩溃恢复把 aifs/gaussian 从 bundles 批量摘除（dependencies 保留）。
+- [x] R14 已落地：快照 `lib/index.js`、`lib/client.js` 与源码 lib 一致；Host 形状离线校验 PASS；18 个工具 output 契约离线自测 18/18 PASS。
+- [x] R14 当时 profile `package.json` bundles 已登记 gaussian；`cordis.patch.yml` 无 gaussian disabled；改前备份 `.bak-20261021-r14`。**勘误（R17 2026-10-22 17:26 实测）**：该 R14/R15b 状态已被后续运行改写——当前 bundles 仅 base/web-app/gaussian，aifs/autorest 不在 bundles；patch 末尾存在 `- id: gaussian / disabled: true`，详见下方 R17 条与 `docs/R17_DIAGNOSIS_20261022.md`。
+- [x] **R15b 重启实机确认（2026-10-22）**：完全退出 DSH 再启动，状态卡经 `/api/gaussian/status` 同源路由显示「可用」，版本 0.2.0、后端 127.0.0.1:8765、数据目录、Gaussian 路径/可用、工作目录、默认内存 12GB/核数 8、Sobko bm25_only、运行中任务「否」、重试按钮全部渲染；bundles 未被摘除；状态卡不再出现 Failed to fetch。
+- [ ] **R17 实测现状（2026-10-22 17:26，以磁盘为准）**：desktop `package.json` dependencies = aifs/autorest/gaussian，bundles = base/web-app/gaussian；`cordis.patch.yml` 末尾 gaussian `disabled: true`；快照 lib 哈希与 R16 终态一致、后端 exe/runtime.json 在位；8765 空闲、无后端/Gaussian 残留进程；DSH 5 进程 16:55 启动、host 26244 跑 desktop profile。故障修复待授权（见 R17 小节两条待办）。
+- [ ] 剩余实机观察：external reuse、controlled dispose、orphan/dispose race、对话内 18 个工具实际调用（R16 schema 修复后需重启 DSH 新开对话验证）、retry 触发、化学链端到端（见下方待办）。
+
+#### 发布收尾：一致性校验与交付包定稿（2026-10-21 晚）
+- [x] 新建 `scripts/make_acceptance_bundle.ps1`：固化排除规则（runtimes/lib/build/dist/__pycache__/node_modules/docs/backups_*/docs/_dsh*/docs/_verify*/*.pyc/*.recover.json/zip 自身），纳入 backend/src/scripts/packaging/docs/*.md 与根清单文件，自带 leak 复核；可重复执行
+- [x] 一致性校验：4 个 lib（源码 + 快照）`node --check` 全 OK；`verify_plugin_shape.mjs` PASS（name=gaussian-dsh，inject=[tools,systemPrompt]，apply=function）；24 个后端 py `py_compile` 0 错；root 与快照 package.json 的 main/exports/bundle/client 字段完全一致（equal=true），版本均 0.2.0
+- [x] `verify_profile_bundle.mjs`：manifest 解析链（bundle.patch、platform=web、client/main 文件）与 bundles 注册项 R14 修复后全 PASS
+- [x] R14/R14c 前端与 README/文档对齐后已重跑 `scripts/make_acceptance_bundle.ps1` 重打 `acceptance_bundle.zip`：50 条目、未压缩 448,736 B（约 449 KB）、zip 194,028 B（约 194 KB）、leak=0（精确字节以脚本输出为准）；verifier 格式校验 PASS、必含条目 14/14 matched、missing=[]，README 关键词 4/4 命中；后端 onedir 不进源码包（单独部署在 runtimes/）
+- [x] 系统资产总清单 `E:\YDW\AI_Study\docs\05-系统环境与工具栈.md` 已登记本项目目录与 `dsh-plugin-toolkit` 技能；改前已备份 `.bak-20261021-r14`
+- [x] 前端可重复构建：`node scripts/build.mjs` 重打后 lib/index.js（35,104 B）、lib/client.js（6,005 B）与快照 SHA256 一致；esbuild 0.25.12 经 E 盘 junction 复用，未下载新依赖、未写 C 盘
+- [x] 清理 PyInstaller 可再生中间产物 `build/`（56.2 MB）、`dist/`（142.0 MB）与 backend `__pycache__`（共释放约 198.1 MB）；最终 onedir 已在 `runtimes/`，删除不影响运行；README 工具表补齐至 18 个工具、后端端点口径对齐 23 个
+- [x] 终态回归：四项离线脚本（shape / profile bundle / toolkit manifest / R14 契约自测）全 PASS；快照两个 lib `node --check` exit 0；24 个后端 py `py_compile` exit 0；最终包 verifier 格式校验 PASS、必含条目 matched、missing=[]
+- [x] README 环境变量双向对齐：逐一比对 `backend/config.py`、`src/index.js` 实际读取集合，修正误写的 `EXPECTED_MULTIWFN_VERSION`（实读 `MULTIWFN_EXPECTED_VERSION`），补齐后端 HOST/DATA_DIR/MANAGED_TOKEN/线程/GC TTL/RSS 阈值/BSE 基址与前端 `GAUSSIAN_BACKEND_MODE/URL/EXE/启动与关闭超时`；安装段改写为 bundles 登记、快照非软链、完全退出重启的实证流程；改前备份 `docs/backups_20261021_rework12/README.md.bak_20261021-r14c`；仅改文档不动业务逻辑
+- [x] 通用技能 `dsh-plugin-toolkit` 同步沉淀 R14c 经验：Core Rules 第 10 条、6.3 第 6 条、6.5 差集检查、坑位 K9（系统提示工具清单与注册工具一一对应）、模板注释；系统资产清单坑位编号 K1–K9
+
+## 待办（非阻塞）
+- [x] ~~重启 DSH 实机确认（R15 启动态，2026-10-22 已完成）~~：状态卡经 `/api/gaussian/status` 显示 host 真实 state/version/address/dataDir 与后端摘要，不再出现 Failed to fetch；managed spawn→health ready；bundles 未被崩溃恢复摘除（截图证据见 R15 小节）
+- [ ] 剩余 DSH 生命周期实机观察：external reuse→owned=false；controlled dispose 仅 `waitForExit()===true` 清 ownership；orphan 保留 handle；dispose/start race 走 controlled stop；对话内 18 个工具可直接调用；retry 按钮触发 host 幂等 start
+- [ ] 真实 chk→formchk→Multiwfn 实跑 cube→VMD 出 PNG，据真实菜单回填 profile
+- [ ] backend 重启后对仍在运行 Gaussian 的持久化接管（reconcile/adopt 实机路径）、stop 运行中任务窗口实测
+- [ ] Sobko server 联调与 notification-before-response / timeout / malformed frame 故障注入
+- [ ] one-file 版本（onedir 验证稳定后再切；当前开关会直接拒绝）
+- [ ] 可选 Minor：后端 CORS 正则补 `dsh-app://` 兜底（状态卡改同源代理后浏览器不再直连 8765，非必经链路；external 手动直连场景兜底用）

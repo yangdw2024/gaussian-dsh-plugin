@@ -1,0 +1,30 @@
+# ===== Node / DSH 前端 =====
+node_modules/
+*.tsbuildinfo
+# 注意：lib/ 是 DSH 运行时入口，不 ignore（DSH 本地加载会按 gitignore 排除文件）
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== PyInstaller 打包产物（不进 git，走 GitHub Release）=====
+build/
+dist/
+runtimes/
+
+# ===== 本地数据与日志 =====
+*.log
+.pytest_cache/
+
+# ===== 系统/编辑器 =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ===== 本机敏感：绝对路径配置覆盖（可选）=====
+.env
