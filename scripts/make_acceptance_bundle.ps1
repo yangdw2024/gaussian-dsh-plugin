@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 # 重打 acceptance_bundle.zip：只纳入源码、脚本、骨架模板与正式文档，
 # 排除运行时、构建缓存、备份目录与临时产物。规则与 docs/RELEASE_READINESS_REPORT.md 第 6 节一致。
 # 用法：pwsh -File scripts/make_acceptance_bundle.ps1

@@ -1,4 +1,4 @@
-# deploy_runtime.ps1 - 把 onedir 产物部署到 DSH runtimes 约定目录并生成 sha256 清单
+﻿# deploy_runtime.ps1 - 把 onedir 产物部署到 DSH runtimes 约定目录并生成 sha256 清单
 #
 # 用法：
 #   .\scripts\deploy_runtime.ps1

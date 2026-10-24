@@ -49,23 +49,27 @@ output parsing → Multiwfn/VMD post-processing (orbitals / ESP / RDG).
 
 ## 安装 / Installation
 
-### 方式 A：下载预编译后端（推荐，Windows）
+### 方式 A：从 DSH 插件市场装（推荐）
 
-1. 去 [Releases](../../releases) 下载最新 `gaussian-backend-win32-x64.zip`，解压到任意目录；
+在 DSH 客户端 → 插件 → 添加插件，搜索 `@gd/gp` 安装即可。后端首次启动会自动从 GitHub Release 下载匹配的 Windows 预编译包。
+
+### 方式 B：下载预编译后端（Windows）
+
+1. 去 [Releases](../../releases) 下载最新 `gaussian-backend-win32-x64.zip`，解压；
 2. 在 DSH 客户端「添加插件」里填本地插件目录路径（见下）。
 
-### 方式 B：从源码运行
+### 方式 C：从源码运行
 
 ```bash
-git clone https://github.com/<your-name>/gaussian-dsh-plugin.git
+git clone https://github.com/yangdw2024/gaussian-dsh-plugin.git
 cd gaussian-dsh-plugin
 npm install                      # 前端依赖
 npm run build                    # 编译 lib/
-pip install -r requirements.txt # 后端依赖（rdkit 建议 conda 装）
+pip install -r requirements.txt  # 后端依赖（rdkit 建议 conda 装）
 python -m backend.app            # 手动起后端（DSH managed 模式会自动拉起）
 ```
 
-### 在 DSH 里加载插件
+### 在 DSH 里加载本地插件
 
 DSH → 设置 → 插件 → 添加插件 → 在最上面输入框填**本插件目录的绝对路径**：
 

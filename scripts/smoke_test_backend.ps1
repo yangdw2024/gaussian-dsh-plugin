@@ -1,4 +1,4 @@
-# smoke_test_backend.ps1 — 冒烟测试 gaussian-backend.exe
+﻿# smoke_test_backend.ps1 — 冒烟测试 gaussian-backend.exe
 #
 # 启动 exe，检查 /v1/health，然后关闭。
 # 用于验证打包后的 exe 能正常启动、依赖完整。

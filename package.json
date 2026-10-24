@@ -1,12 +1,36 @@
 {
-  "name": "@gaussian/dsh-plugin-gaussian",
+  "name": "@gd/gp",
   "version": "0.2.0",
-  "private": true,
   "type": "module",
-  "description": "Cordis plugin for Gaussian 16 calculation assistance: input generation, SMILES-to-3D modeling (RDKit), output parsing, job management (serial), BSE basis sets, Sobko knowledge base, error diagnosis, and Multiwfn/VMD post-processing (orbital/ESP/RDG).",
+  "description": "DSH (DeepSeek Harness) plugin for Gaussian 16: input generation, SMILES-to-3D (RDKit), output parsing, serial job management, BSE basis sets, Multiwfn/VMD post-processing (orbital/ESP/RDG).",
   "main": "./lib/index.js",
   "engines": {
     "node": ">=20"
+  },
+  "files": [
+    "lib/",
+    "src/",
+    "backend/",
+    "scripts/",
+    "cordis.patch.yml",
+    "package.json",
+    "README.md",
+    "LICENSE",
+    "requirements.txt"
+  ],
+  "keywords": [
+    "dsh", "cordis", "gaussian", "computational-chemistry",
+    "multiwfn", "vmd", "rdkit", "dft", "orbital", "esp", "rdg"
+  ],
+  "author": "yangdw2024",
+  "license": "MIT",
+  "homepage": "https://github.com/yangdw2024/gaussian-dsh-plugin#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yangdw2024/gaussian-dsh-plugin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yangdw2024/gaussian-dsh-plugin/issues"
   },
   "dsh": {
     "bundle": {
@@ -30,7 +54,6 @@
       "pythonEntry": "backend.app:main"
     }
   },
-  "license": "MIT",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",

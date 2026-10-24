@@ -15,7 +15,7 @@ const anchor = join(profileDir, "package.json");
 const requireAnchor = createRequire(anchor);
 const problems = [];
 
-const pkgName = "@gaussian/dsh-plugin-gaussian";
+const pkgName = "@gd/gp";
 const profile = JSON.parse(readFileSync(anchor, "utf8"));
 const bundles = profile.dsh?.profile?.bundles ?? [];
 console.log("profile bundles:", JSON.stringify(bundles, null, 0));

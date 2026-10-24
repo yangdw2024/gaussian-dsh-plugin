@@ -63,6 +63,17 @@ datas += collect_data_files(
     include_py_files=False,
 )
 
+# ----- pydantic_core 必须整套收集（R18 修复） -----
+# 现象：onedir 产物里 pydantic_core/ 只有一个 _pydantic_core.cp313-win_amd64.pyd，
+# 缺 __init__.py / core_schema.py / _pydantic_core.pyi，启动即
+#   ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'
+# 原因：conda 版 pydantic_core 的 __init__.py 被 PyInstaller 判为纯模块进 PYZ，
+# 而 onedir 的 _internal/pydantic_core/ 只落了二进制，形成「空壳包」把 PYZ 里的
+# __init__ 遮蔽掉。显式 collect_submodules + collect_data_files 双管齐下。
+hiddenimports += collect_submodules("pydantic_core", on_error="raise")
+datas += collect_data_files("pydantic_core", include_py_files=True)
+binaries += collect_dynamic_libs("pydantic_core")
+
 binaries += collect_dynamic_libs("rdkit")
 
 # Windows RDKit wheels 可能有 delvewheel .libs 目录

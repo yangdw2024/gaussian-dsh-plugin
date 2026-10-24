@@ -5,7 +5,7 @@
  * 显示后端服务状态、Gaussian 可执行文件、Sobko 知识库、运行中任务等。
  */
 
-window.__ModuleLoader__.load({ id: "@gaussian/dsh-plugin-gaussian", factory: (require) => {
+window.__ModuleLoader__.load({ id: "@gd/gp", factory: (require) => {
   var module = { exports: {} };
   var exports = module.exports;
   "use strict";

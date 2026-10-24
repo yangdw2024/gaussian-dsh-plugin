@@ -1,5 +1,5 @@
 // 模拟 DSH cordis-plugin-loader.unwrapExports + Cordis 读取 plugin.inject/apply/name
-const file = "file:///C:/Users/Administrator/.dsh/profiles/desktop/node_modules/@gaussian/dsh-plugin-gaussian/lib/index.js";
+const file = "file:///C:/Users/Administrator/.dsh/profiles/desktop/node_modules/@gd/gp/lib/index.js";
 const ns = await import(file);
 
 // 与 cordis-plugin-loader/lib/index.js unwrapExports 等价

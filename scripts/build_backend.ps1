@@ -1,4 +1,4 @@
-# build_backend.ps1 - Build gaussian-backend.exe (onedir, recommended first)
+﻿# build_backend.ps1 - Build gaussian-backend.exe (onedir, recommended first)
 #
 # Usage:
 #   .\scripts\build_backend.ps1
