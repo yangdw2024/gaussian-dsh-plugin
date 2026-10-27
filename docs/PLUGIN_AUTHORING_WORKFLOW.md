@@ -15,8 +15,8 @@
 | **B. generation 快照** | `%APPDATA%\dsh-desktop\harness\profiles\.generations\live\<generationId>\` | DSH 从 A 复制出来的只读快照，含 `source/<name>/` 与 `node_modules/<name>/` |
 | **C. profile 装配区** | `%APPDATA%\dsh-desktop\harness\profiles\web\` | DSH 真正 import 的入口，`node_modules/<name>` 必须指向 B |
 
-> `generationId = <包名去@并把/换成+> + "+" + <version> + "+" + <lockfile sha256 前12位>`
-> 例：`@gd/gp` + `0.2.0` → `gd+gp+0.2.0+<hash>`
+> `generationId = <包名去@并把/换成+> + "+" + <version> + ["+" + <lockfile sha256 前12位>]`
+> registry 安装的插件带 hash 段（如 `billion-context+0.1.204+18a48c94a3ee`）；**本地 `file:` 插件不带 hash 段**，本项目实测为 `@gd+gp+0.2.0`。最终以 `profiles\.generations\desired.json` 实测清单为准。
 
 **关键点：C 里的 `node_modules/<name>` 必须能解析到 B 里一个带 `package.json` 的真实目录。** DSH 的解析函数（`dsh-app-boot` 的 `resolveBundleDir`）逻辑是：
 
@@ -59,18 +59,23 @@ Windows 上 `MAX_PATH = 260`。`generationId` 目录名会直接嵌进最终 exe
 ```
 
 - `dsh.bundle.patch` 必须存在，否则报 `profile bundle X declares no dsh.bundle in its package.json`。
-- 客户端入口（若有）通过 `window.__ModuleLoader__.load({ id: "<包名>", ... })` 注册，**id 必须等于包名**。
+- 客户端入口（若有）通过 `window.__ModuleLoader__.load({ id: "<稳定唯一 id>", ... })` 注册。**注意区分两个名字**：
+  - `package.json` 的 `name`（packageName）是 host bundle 匹配、多来源去重的依据，必须与 `cordis.patch.yml` 的 `name` 一致（步骤 3）；
+  - client.js 内 ModuleLoader 的 `id` 只作浏览器模块 `loadCache` 记忆化键，**不参与 host 匹配**；建议取稳定唯一名（通常与包名一致便于排查），但非强制；本机不存在第二个模块共用同一 id 时，旧 id 字符串残留只是一致性瑕疵，不会触发 `duplicate factory`。
 
-### 步骤 3｜`cordis.patch.yml` 的 name 必须等于包名
+### 步骤 3｜`cordis.patch.yml` 的 name 必须等于包名，entry id 可独立稳定命名
 
 ```yaml
 - insert:
     - id: gaussian
-      name: '@gd/gp'          # ← 必须与 package.json name 完全一致
+      name: '@gd/gp'          # ← name 必须与 package.json name 完全一致（host 按 packageName 匹配）
       config:
         backendMode: !!js process.env.GAUSSIAN_BACKEND_MODE ?? 'managed'
         baseUrl: !!js process.env.GAUSSIAN_BACKEND_URL ?? 'http://127.0.0.1:8765'
 ```
+
+- `name`（packageName）与 `package.json` 完全一致，漏了会报 `cannot resolve profile bundle "@gd/gp"`。
+- `- id:` 是 entry 槽位名（状态卡、locale namespace、systemPrompt 槽位沿用），可以与包名不同；改包名时 `id` 保持不变可避免前端槽位漂移。离线校验脚本在 id ≠ 包名时要显式传 `--id`。
 
 **改包名时，这是最容易漏的一处。** 漏了会报 `cannot resolve profile bundle "@gd/gp"`，因为 patch 里 insert 的还是旧名。
 
@@ -253,3 +258,34 @@ warn hmr: Error: dsh: failed to prepare profile bundle @gd/gp
 4. 只有第 3 步在短路径也失败，才回头查 spec 与构建链。
 
 **这个顺序能省掉 80% 的无用排查。**
+
+## 6. 根因5：改包名/重 build 后，DSH 加载的仍是旧 bundle（安全模式）
+
+**现象**：源码（`src/lib/client.js`）里的 `__ModuleLoader__.load({ id: ... })` 已改成新包名，
+但 DSH 一启动就进安全模式；`harness.log` 出现：
+```
+[renderer] client-modules: duplicate factory registration for "<旧包名>" (bundle executed twice without invalidate?)
+[renderer] client-modules: <新包名> import failed
+[safe-mode] disabling <新包名> in the web profile; bundle rows skipped
+```
+
+**根因**：DSH 实际加载的不是源目录，而是 generation 快照
+`profiles/.generations/live/<generationId>/node_modules/<pkg>/`（`web/node_modules/<pkg>` 是指向它的 Junction）。
+改包名后若没重新 build（`npm run build`）并让 DSH 重新生成/同步快照，快照里的 `lib/client.js` 仍注册旧 id：
+- 包名是新的，client factory 却注册旧 id → 框架判定重复注册/对不上 → 该 bundle import 失败 → 安全模式。
+
+**诊断（一条命令对比源目录 vs 快照）**：
+```powershell
+Select-String -Path "<源目录>\lib\client.js","...\.generations\live\<id>\node_modules\@gd\gp\lib\client.js" -Pattern "__ModuleLoader__"
+```
+两处 id 不一致即命中。
+
+**修复**：
+1. 先保证源目录 `npm run build` 产出的 `lib/client.js` 是新 id；
+2. 把 `src/client.js`、`lib/client.js` 覆盖进 generation 快照对应位置（或在 DSH 里卸载后重新"添加本地插件"让它重建快照）；
+3. 退出 DSH（确认无进程），把 `%AppData%\dsh-desktop\Code Cache`、`GPUCache` 重命名（可逆，别直接删），再从桌面图标启动；
+4. 重启后 `harness.log` 应只有 `Harness is ready`，且无 `safe-mode / import failed / duplicate factory`。
+
+**铁律**：源码（尤其 `client.js`/`index.js`）一旦改动，必须 `npm run build` 并让 DSH 重新生成快照；
+只改源目录、不刷新快照，必然再次出现"源码已对、DSH 加载旧 bundle"。
+后端 exe 是否被拉起（端口 8765）不是安全模式判据——后端是懒加载，安全模式只由 renderer 的 client bundle 决定。

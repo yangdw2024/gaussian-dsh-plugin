@@ -4,13 +4,13 @@
 // @deepseek-ai/dsh-client-modules/lib/index.js（resolveMeta 720-749 行 manifest 校验）。
 //
 // 用法：node scripts/verify_profile_bundle.mjs
-// 可选环境变量：DSH_PROFILE_DIR（默认 C:/Users/Administrator/.dsh/profiles/desktop）
+// 可选环境变量：DSH_PROFILE_DIR（默认新布局 %APPDATA%\dsh-desktop\harness\profiles\web；旧布局传 .dsh\profiles\<name>）
 
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const profileDir = process.env.DSH_PROFILE_DIR || "C:/Users/Administrator/.dsh/profiles/desktop";
+const profileDir = process.env.DSH_PROFILE_DIR || "C:/Users/Administrator/AppData/Roaming/dsh-desktop/harness/profiles/web";
 const anchor = join(profileDir, "package.json");
 const requireAnchor = createRequire(anchor);
 const problems = [];

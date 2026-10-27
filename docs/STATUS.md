@@ -1,5 +1,7 @@
 # gaussian-dsh-plugin 项目状态记录
 
+> **2026-10-26 R17c 收尾复核（最新口径，以本小节与 `docs/R17C_RELEASE_RECHECK_20261026.md` 为准）**：插件包名已改为 `@gd/gp`（v0.2.0）；DSH 0.12.1 新布局实际读取 `%APPDATA%\dsh-desktop\harness\profiles\web\`（旧 `C:\Users\Administrator\.dsh\profiles\desktop\` 为不参与运行的历史遗留快照）。本轮四项离线契约、后端独立 smoke 34/34、历史产物实物与日志解析复跑全部 PASS，未发现新 Blocker/Major；DSH 对话内 managed 生命周期、新布局状态卡渲染、新一轮化学链端到端为 NOT RUN，总体结论 **READY WITH EXTERNAL SMOKE PENDING**。下文 L3 起的历史口径（旧包名、旧 profile 路径、17,657,746 B 旧 exe、18 工具计数、R16 时点状态）保留作过程记录，发布判定一律以 R17C 文档为准。
+
 > 最后更新：2026-10-22（R16 修复工具 function schema：18 个工具 parameters 由扁平表编译为 `{type:"object", properties, required?}`，output.schema 统一为 annotation-only 任意 JSON；离线契约/shape/bundle/manifest 四项全 PASS，lib 已覆盖快照且哈希一致；后端零改动。对话内工具真实注册可见仍需完全退出重启 DSH、新开对话调用一次确认，属 L4 实机项）。R15b 实机闭环：状态卡改走 DSH host 同源代理后，当日完全退出重启 DSH，managed spawn→ready 与状态卡同源渲染链路实机 PASS——卡片「可用」、版本 0.2.0、后端 127.0.0.1:8765、Gaussian 路径/工作目录/内存核数/Sobko 字段齐全，bundles 未被摘除；剩余 external reuse、controlled dispose、orphan/dispose race、对话内 18 工具实际调用、retry 实机触发与化学链端到端待实机观察
 
 ## 硬件环境

@@ -1,5 +1,7 @@
 # Release Readiness Report — gaussian-dsh-plugin v0.2.0
 
+> **2026-10-26 R17c 复核已替代本报告作为当前发布判定依据：见 `docs/R17C_RELEASE_RECHECK_20261026.md`。** 本轮（2026-10-26）在新布局 `%APPDATA%\dsh-desktop\harness\profiles\web\` 下复跑四项离线契约、后端独立 smoke 34/34、历史产物实物与日志解析复核，全部 PASS；结论维持 **READY WITH EXTERNAL SMOKE PENDING**，但工具计数更新为 19、包名更新为 `@gd/gp`、exe 哈希/大小更新为 10-24 新版本。本报告下方 2026-10-22 R16 时点记录保留作历史过程，未执行项的新状态以 R17C 报告 §3 Smoke Matrix 与 §5 未验证事项为准。
+
 日期：2026-10-22（R16 复核：工具 function schema parameters 编译为 object-root，离线四项全 PASS；R15b 实机启动态 PASS，剩余生命周期与化学链 NOT RUN）｜ 构建机：Windows（AMD Ryzen 7 9700X / RTX 5060 Ti）｜ Python 3.13.13（D 盘 miniconda3）｜ PyInstaller 6.21.0
 
 > 本报告只记录本轮**实际执行过**的验证；未执行的外部程序/实机项一律标 NOT RUN，不写成 PASS。静态代码闭环结论见 `FIX_REPORT_20261020.md`、`LESSONS_LEARNED.md`、`DSH_ARCHITECTURE.md`。

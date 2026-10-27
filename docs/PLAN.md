@@ -1,7 +1,8 @@
 # gaussian-dsh-plugin 扩展规划文档
 
-> 创建时间：2026-10-20 ｜ 最后更新：2026-10-22
-> 状态：后端 R1–R10 静态闭环、onedir 重打部署、R11–R13 DSH 激活修复落盘、H2O 单点实机通过；R14 补齐 18 个工具 output 契约离线 18/18 PASS、bundles 重新登记；R14c 提示词补齐到 18 个、README 环境变量与安装流程对齐代码；R15 状态卡改 host `connection` 同源代理，2026-10-22 重启实机 managed spawn→ready 与状态卡渲染 PASS；R16 修复工具 parameters object-root schema（离线 18/18 PASS、四项离线校验全绿）；仅剩对话内 18 工具重启实调确认与真实 Multiwfn/VMD 端到端化学链
+> 创建时间：2026-10-20 ｜ 最后更新：2026-10-26（R17c 收尾复核）
+> **2026-10-26 口径（最新，见 `docs/R17C_RELEASE_RECHECK_20261026.md`）**：包名 `@gd/gp` v0.2.0；注册工具 **19 个**（下文"18 个工具"为历史计数，第 19 个 `extract_structure_from_file` 已于 10-23 加入，提示词与 README 已对齐）；DSH 新布局 `%APPDATA%\dsh-desktop\harness\profiles\web\`；本轮离线契约 / 后端 smoke / 产物复核全 PASS，L4 对话内生命周期与新一轮化学链 NOT RUN，结论 READY WITH EXTERNAL SMOKE PENDING。下文规划条目保留作历史过程记录。
+> 历史状态：后端 R1–R10 静态闭环、onedir 重打部署、R11–R13 DSH 激活修复落盘、H2O 单点实机通过；R14 补齐 18 个工具 output 契约离线 18/18 PASS、bundles 重新登记；R14c 提示词补齐到 18 个、README 环境变量与安装流程对齐代码；R15 状态卡改 host `connection` 同源代理，2026-10-22 重启实机 managed spawn→ready 与状态卡渲染 PASS；R16 修复工具 parameters object-root schema（离线 18/18 PASS、四项离线校验全绿）；仅剩对话内 18 工具重启实调确认与真实 Multiwfn/VMD 端到端化学链
 > 作者：YDW + Doubao
 
 ## 一、项目逆推结论

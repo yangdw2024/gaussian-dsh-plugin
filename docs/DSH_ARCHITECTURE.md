@@ -1,5 +1,7 @@
 # DeepSeek Harness（DSH）架构与第三方插件开发/安装参考
 
+> **2026-10-26 更新指针**：DSH 0.12.1 新布局根为 `%APPDATA%\dsh-desktop\harness\`，活跃 profile 为 `profiles\web\`，generation 快照在 `profiles\.generations\live\<pkg>+<name>+<version>\`，web `node_modules\<pkg>` 为 Junction；旧路径 `C:\Users\Administrator\.dsh\profiles\desktop` 为历史遗留、不被当前版本读取。新布局三层模型（profile package.json dependencies + bundles、generation.json、shim manifest、Junction 联接）详见 `docs/PLUGIN_AUTHORING_WORKFLOW.md` 与 R17C 复核报告 `docs/R17C_RELEASE_RECHECK_20261026.md` §2.3；下方 2026-10-21 记录的旧 profile 路径、旧 app.asar 体积与旧布局装机包仅作历史过程保留。
+
 > 整理日期：2026-10-21 ｜ 本机 DSH：Electron 桌面端，`E:\DSH\resources\app.asar`（182.8 MB，mtime 2026-10-17），profile 目录 `C:\Users\Administrator\.dsh\profiles\desktop`。
 > 用途：把 DSH 的"进程分层、插件清单、装载链路、服务/事件、subprocess 契约、profile 与插件管理、排障决策"固化成可复用参考，后续新增/安装/排障 DSH 第三方插件直接对照本文，不再从零逆向。
 > 资料分级：**【官方】**= 官方仓库/文档原文约定；**【本机实证】**= 解包本机 `app.asar` 读到的源码位置或实测行为；**【实测坑】**= gaussian 插件本轮真实踩过并修掉的问题，编号对应 `FIX_REPORT_20261020.md`。

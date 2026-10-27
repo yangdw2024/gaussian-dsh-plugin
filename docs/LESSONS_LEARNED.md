@@ -249,3 +249,40 @@
 - **已排除的自动回写路径（源码依据，别重复排查）**：`reconcile()`（`lib/index.js:323–350`）只在 install/remove 命令后跑，过滤要求 `bundleManifest(...) !== undefined`，快照 `package.json` 声明了 `dsh.bundle.patch` 就不会被滤；`listBundles()`（`:1681–1800`）只读 manifest，兼容性不通过只在 UI 行标 `incompatible-version`，**不回写 bundles 数组**；`evaluatePluginCompatibility` 只检查 `engines.dsh` 与 DSH peerDependencies，未声明即视为无版本要求、兼容。
 - **修复动作（最小、可逆）**：备份摘除后状态 `package.json.bak-20261022-r17c` → bundles 补回目标包（顺序 base → web-app → 第三方）→ `ConvertFrom-Json` 断言"dependencies 与 bundles 双侧都有该包" → toolkit `verify_plugin_manifest.mjs` 离线 PASS → 完全退出重启，**先复查 bundles 是否再次只剩官方两条**；若再被摘，说明存在未定位的自动回写路径，再继续追 renderer Local Storage leveldb 与 host 启动日志，不得直接认定为手动误操作。
 - **故障 A 本机复测纪律（补充第 37 条）**：本机未装 PowerShell 7 时，DSH 本地执行器按设计回退 System32 WindowsPowerShell 5.1，属预期；普通终端 `pwsh` 报 CommandNotFound 不能当作"shell 损坏"证据。判定系统 shell 是否健康，要用绝对路径独立启动 `powershell.exe` 5.1 与 `cmd.exe` 跑 `echo hello`，两者 exitCode=0 输出正常即排除系统本体损坏；0xC0000142 继续在 DSH 会话档位与 runner/koffi 链路分层定位。
+
+### 39. DSH 0.12.1 新布局：harness/generation/Junction 三层模型；旧 `.dsh` 目录不再参与运行（R17c 复核，2026-10-26）
+- **现象**：按旧文档路径 `C:\Users\Administrator\.dsh\profiles\desktop\` 取证时，配置与哈希和 10-22 R17 记录对不上；实际 DSH 0.12.1 读取的是新布局 `%APPDATA%\dsh-desktop\harness\`（即 `C:\Users\Administrator\AppData\Roaming\dsh-desktop\harness\`）。
+- **新布局三层结构（本机实测）**：
+  1. **profile 层**：`profiles\web\package.json` 同时登记 `dependencies`（`"@gd/gp": "0.2.0"`，dependencies 末项）与 `dsh.profile.bundles`（26 项，`@gd/gp` 居第 10 位、非末位）；`generationProjection.plugins["@gd/gp"].generationId = "@gd+gp+0.2.0"`；`pnpm.overrides["@gd/gp"] = "link:../.generations/live/@gd+gp+0.2.0/node_modules/@gd/gp"`；`cordis.patch.yml` 为用户覆盖层。
+  2. **generation 层**：`profiles\.generations\live\<scope>+<name>+<version>\`，`generation.json` 记录 `pluginName`、`version`、`sourceSpec`（项目根绝对路径）；内含 `node_modules\<pkg>\`（shim 精简 manifest，DSH 实际读取）与 `source\<pkg>\`（整包源副本，仅溯源留档）；`desired.json` 登记全部 generation，live 目录与之一一对应。
+  3. **联接层**：`profiles\web\node_modules\@gd\gp` 是 **Junction**（LinkType=Junction），指向 generation shim；不是 pnpm 复制快照，也不是软链。
+- **旧布局处置**：`C:\Users\Administrator\.dsh\`（profiles/desktop、profiles/web、acp、headless、sessions、skills、redteam 等）是迁移前遗留，当前 DSH 不读取；复核时不要拿旧目录的配置、哈希、崩溃日志当现状证据。旧目录是否清理需用户决策，不擅自删除。
+- **复核先确认活跃 profile**：读 harness 根 `desktop-host-plugins.json`（全局 disabled 列表）、`profiles\<name>\package.json` 的 dependencies/bundles、`cordis.patch.yml`；`desktop-safe-mode` 是崩溃恢复自动产物（空依赖、仅官方 bundles），与最终态无关，不要误判成当前配置。
+- **取证时刻先确认运行态**：复核开始先 `Get-NetTCPConnection -LocalPort 8765` 与 `Get-Process gaussian-backend,g16,Multiwfn,vmd`；DSH 未运行、端口空闲、无残留进程时，后端 smoke 必须用独立端口（如 8792/8799）+ 临时数据目录 + `GC_ON_STARTUP=0`，跑完受控退出，不污染 `C:\Users\Administrator\.gaussian-dsh\` 正式目录、不提交真实 Gaussian 任务。
+
+### 40. 包名短名化规避 MAX_PATH；entry id 与 packageName 不同时离线校验必须显式传 `--id`（R17c，2026-10-26）
+- **背景**：旧包名 `@gaussian/dsh-plugin-gaussian` 拼到 generation 深路径后 exe 绝对路径逼近 260 字符上限；10-24 改短包名 `@gd/gp`，但 cordis entry id 保持 `gaussian`（状态卡、locale namespace、systemPrompt 槽位沿用旧名，避免前端槽位漂移）。
+- **两条名字别混**：`package.json` 的 `name`（packageName，host bundle 匹配与去重依据）与 `cordis.patch.yml` 的 `id`（entry 槽位名）可以不同；toolkit `verify_plugin_manifest.mjs` 默认用包名去 patch.yml 里找 `- id: <pkg>`，两者不同会误报"被 disabled"，必须显式 `--id gaussian`。
+- **host 匹配按 packageName，不按 client.js 内 ModuleLoader id**：通读 `@deepseek-ai/dsh-client-modules/lib/index.js` 实证——`clientExportOf(packageName, exports)` 按 packageName 取导出，多来源按 packageName 去重抛错；client.js 内 `__ModuleLoader__.load({id, factory})` 的 id 只作浏览器 `loadCache` 记忆化键。本插件 client 内只 `require2("react")`、不 require 自身包名，本机无第二个模块使用旧 id，不存在重复 factory 覆盖。因此快照 client.js 残留旧包名 id 字符串只属 Minor 一致性问题，不是激活故障；下次构建同步快照即可，不必为此改状态机。
+- **快照三层哈希复核口径**：同一文件要比对项目根 `lib/`、generation shim `node_modules/<pkg>/lib/`、web junction `node_modules/<pkg>/lib/` 三处 SHA-256；`lib/index.js` 三层一致才证明前端产物已正确部署；`lib/client.js` 若落后，单独定性差异行与影响面，不要扩大成整包过期。
+
+### 41. 工具计数以源码注册集合为准；文档"18 个"是计数落后，不是源码缺陷；会话审计要区分插件工具与内置工具（R17c，2026-10-26）
+- **口径修正**：`src/index.js` 注册集合为 **19 个**工具（第 19 个 `extract_structure_from_file` 在 L773-781，后端端点 `/v1/structure/extract`）；历史文档"18 个"是 10-23 加入该工具前的计数，README 工具表与系统提示 `GAUSSIAN_GUIDANCE` 已同步到 19。复核时以源码 `ctx.tools.register` 实际收集集合为准，不沿用旧文档计数。
+- **三条集合对齐**：注册工具名集合 = 系统提示 section 列出集合 = README 工具表覆盖集合；两两做差集，非空即提示词漏列或文档落后（K9）。
+- **会话 jsonl 审计归属纪律**：统计失败工具时先按工具名前缀分组，GP 工具（`gaussian_*`、`sobko_*`、`postprocess_*`、`search_basis_sets`、`get_basis_set`、`search_gaussian_keywords`、`diagnose_gaussian_error`、`generate_gaussian_input*`、`extract_structure_from_file`、`parse_gaussian_output`、`create/get/list_postprocess_task`）与内置工具（`ops_bash`、`read`、`write`、`glob`、`grep`、`job_output`、`win_bash`、`compress`、`cg` 等）分开计数；内置 shell 的 0xC0000142、中文乱码、PermissionError、FileNotFoundError 不归插件缺陷。
+- **历史产物不等于本轮实机**：10-23/10-24 落盘的 jobs/postprocess 记录与实物，只能证明"后端侧解析与产物落位规则正确"；DSH 对话内完整生命周期、新一轮化学链端到端仍须 L4 实机观察，报告里分别标 PASS（历史产物复核）与 NOT RUN（本轮未现场复跑）。
+
+### 42. 旧 acceptance_bundle.zip 过期后不得当交付包；发布前必须重打并跑 leak 复核（R17c，2026-10-26）
+- **现象**：`acceptance_bundle.zip`（R16，2026-10-22 16:36:33，227,669 B）停在 10-23 P1/P3/P2-1 修复、10-24 改名与新布局迁移之前；本轮复核发现它不代表当前源码。
+- **纪律**：源码改动后旧交付包自动过期；发布动作章节必须明确"哪个目录/包才是最终产物"，旧 zip 标为历史归档、不混入新包。重打时按清单排除 `runtimes/`、`lib/`、`build/`、`dist/`、`__pycache__/`、`node_modules/`、`backups_*/`、`docs/_verify*/`、`*.pyc`、`*.recover.json`；打包后 `zip-list` 查 leak、解压回读抽查包内 `src/`、`docs/` 为最新版。
+- **未打 tag/Release 的前置条件**：L1 离线契约、L2 后端独立 smoke、L3 打包复核通过只代表代码与运行框架可发布；L4 对话内生命周期、状态卡渲染、新一轮化学链端到端未观察完之前，内部可冻结版本号，对外不打 tag、不发 Release。
+
+### 43. 发布基线先跑 `git rev-parse` / `git log` 确认是否真为仓库；历史文档"非 git"表述可能对应当时时点（R17c 复核，2026-10-26）
+- **现象**：10-22 历史报告写"非 git 仓库、以 acceptance_bundle.zip 为基线快照"，本轮 R17c 复核时 `git rev-parse` 返回 true——项目于 10-24 21:46:30 才 `git init` 并两次提交（`422f5e1` 初始、`8af984b v0.2.0 ...`）。两条表述在各自时点都是事实，矛盾只来自复核时没先跑 git 命令核实。
+- **取证纪律**：冻结基线第一步先 `git rev-parse --is-inside-work-tree`、`git log --oneline -5`、`git status --short`、`git branch --show-current`：
+  1. 是仓库就记录 HEAD 全量 commit hash、提交时间、提交信息、分支，并区分"已提交基线"与"工作区未提交改动"；
+  2. `git status --short -- src backend lib runtimes package.json cordis.patch.yml` 单独确认业务源码相对 HEAD 是否干净，文档/脚本改动不混进"业务基线已冻结"结论；
+  3. 不是仓库才退到文件 SHA-256 + 本报告哈希表作为基线；
+  4. 历史文档里的旧表述不要凭印象回改，先看它写的是哪个日期时点；当前报告只写本轮实测值。
+- **本轮实证**：HEAD=`8af984b73b95cc2e8948f53876072b41afb99b95`（main，2026-10-24 21:46:30）；业务源码 `src/ backend/ lib/ runtimes/ package.json cordis.patch.yml` 相对 HEAD 零改动；未提交改动仅文档与两个离线校验脚本。`.gitignore` 已排除 `node_modules/`、`build/`、`dist/`、`runtimes/`、`__pycache__/`、`*.log`，`lib/` 入库。
+
