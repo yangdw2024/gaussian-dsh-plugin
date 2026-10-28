@@ -10,13 +10,11 @@
   "files": [
     "lib/",
     "src/",
-    "backend/",
-    "scripts/",
+    "runtimes/",
     "cordis.patch.yml",
     "package.json",
     "README.md",
-    "LICENSE",
-    "requirements.txt"
+    "LICENSE"
   ],
   "keywords": [
     "dsh", "cordis", "gaussian", "computational-chemistry",
