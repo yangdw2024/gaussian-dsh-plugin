@@ -1,3 +1,4 @@
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/yangdw2024/gaussian-dsh-plugin)
 # gaussian-dsh-plugin
 
 > 一个在 [DSH (DeepSeek Harness)](https://github.com/) 客户端里运行的 Gaussian 16 计算辅助插件，把 Gaussian、RDKit、Multiwfn、VMD 串成一条 AI 可调用的工具链。
