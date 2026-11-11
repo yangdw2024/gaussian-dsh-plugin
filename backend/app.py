@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .basis_set import basis_set_client
-from .config import settings
+from .config import SERVICE_VERSION, settings
 from .gaussian_input import GaussianInputRequest, generate_gjf, validate_gjf
 from .gaussian_output import output_to_dict, parse_gaussian_log
 from .job_manager import job_manager
@@ -41,7 +41,7 @@ from .sobko_client import sobko_client
 app = FastAPI(
     title="Gaussian DSH Plugin Backend",
     description="辅助 Gaussian 计算的本地后端：输入生成、输出解析、任务管理、基组获取、知识库检索。",
-    version="0.2.0",
+    version=SERVICE_VERSION,
 )
 
 # 实例 ID（启动时生成，用于 health 端点确认服务身份）
@@ -103,7 +103,7 @@ def _on_startup():
     ready = {
         "event": "ready",
         "service": "gaussian-dsh-backend",
-        "version": "0.2.0",
+        "version": SERVICE_VERSION,
         "baseUrl": f"http://{settings.host}:{settings.port}",
         "pid": os.getpid(),
     }
@@ -186,7 +186,7 @@ def health():
     return {
         "ok": True,
         "service": "gaussian-dsh-backend",
-        "version": "0.2.0",
+        "version": SERVICE_VERSION,
         "pid": os.getpid(),
         "instance_id": INSTANCE_ID,
         "uptime_seconds": round(time.time() - STARTED_AT, 1),
@@ -210,7 +210,7 @@ def status():
     lease = chem_scheduler.current_lease()
     return {
         "status": "ok",
-        "version": "0.2.0",
+        "version": SERVICE_VERSION,
         "gaussian": {
             "exe": settings.gaussian_exe,
             "exists": gaussian_exists,
@@ -753,10 +753,11 @@ def api_create_postprocess_task(req: PostprocessRequest):
                 postprocess_manager.run_task(tid, request)
             except Exception as e:  # 兜底：run_task 内部已设 failed，这里仅防线程崩溃
                 try:
-                    t = postprocess_manager.get_task(tid)
+                    t = postprocess_manager._load(tid)
                     if t and t.status not in ("completed", "failed"):
                         t.status = "failed"
                         t.error = f"后台执行未捕获异常: {e}"
+                        t.finished_at = time.time()
                         postprocess_manager._save(t)
                 except Exception:
                     pass

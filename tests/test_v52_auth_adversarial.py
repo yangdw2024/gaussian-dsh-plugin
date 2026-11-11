@@ -166,7 +166,7 @@ class TestV52AuthAdversarial(unittest.TestCase):
             validate_safe_path(rel_escape, mode="read")
 
     def test_02_mcp_stdio_registry_exposes_no_signing_or_admin_primitives(self) -> None:
-        """Attack 2: Live mcp_server.py exposes strictly the 12 approved tools and blocks admin signing calls."""
+        """Attack 2: Live mcp_server.py exposes strictly approved tools (17 core + optional Sobko) and blocks admin signing calls."""
         env = os.environ.copy()
         env["PYTHONPATH"] = str(REPO_ROOT)
         proc = subprocess.Popen(
@@ -207,7 +207,28 @@ class TestV52AuthAdversarial(unittest.TestCase):
             tools_resp = json.loads(proc.stdout.readline())
             tool_names = {t["name"] for t in tools_resp["result"]["tools"]}
 
-            self.assertEqual(len(tool_names), 12)
+            approved_core = {
+                "gaussian_status",
+                "generate_gaussian_input",
+                "parse_gaussian_output",
+                "diagnose_gaussian_error",
+                "search_gaussian_keywords",
+                "search_basis_sets",
+                "get_basis_set",
+                "generate_gaussian_input_from_smiles",
+                "submit_gaussian_calculation",
+                "get_gaussian_job_status",
+                "list_gaussian_jobs",
+                "stop_gaussian_calculation",
+                "extract_structure_from_file",
+                "postprocess_capabilities",
+                "create_postprocess_task",
+                "get_postprocess_task",
+                "list_postprocess_tasks",
+            }
+            optional_sobko = {"sobko_search", "sobko_fetch"}
+            self.assertEqual(approved_core - tool_names, set())
+            self.assertEqual((tool_names - approved_core) - optional_sobko, set())
             forbidden_names = {
                 "authorize_calculation_as_human",
                 "admin_approve_gaussian_job",

@@ -130,6 +130,8 @@ def render_orbitals(
         # M8: 校验 TGA 存在非零再转 PNG，缺失即报错，不静默少返回图
         _require_tga(tga_path, f"轨道 {cube_path.name}")
         out = _tga_to_png(tga_path, png_path)
+        if out.resolve() != tga_path.resolve():
+            tga_path.unlink(missing_ok=True)
         png_paths.append(out)
 
     return png_paths
@@ -195,7 +197,10 @@ def render_esp_surface(
         raise RuntimeError(f"VMD ESP 渲染失败（返回码 {proc.returncode}）：{log_text[-500:]}")
 
     _require_tga(tga_path, "ESP 表面")
-    return _tga_to_png(tga_path, output_path)
+    out = _tga_to_png(tga_path, output_path)
+    if out.resolve() != tga_path.resolve():
+        tga_path.unlink(missing_ok=True)
+    return out
 
 
 def render_rdg(
@@ -249,4 +254,7 @@ def render_rdg(
         raise RuntimeError(f"VMD RDG 渲染失败（返回码 {proc.returncode}）：{log_text[-500:]}")
 
     _require_tga(tga_path, "RDG/NCI")
-    return _tga_to_png(tga_path, output_path)
+    out = _tga_to_png(tga_path, output_path)
+    if out.resolve() != tga_path.resolve():
+        tga_path.unlink(missing_ok=True)
+    return out

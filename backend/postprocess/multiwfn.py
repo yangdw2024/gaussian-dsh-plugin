@@ -74,6 +74,7 @@ def probe_version(fchk_path: Optional[Path] = None, timeout: float = 8.0) -> Opt
             capture_output=True,
             timeout=timeout,
             cwd=str(Path(exe).parent),
+            close_fds=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         blob = (proc.stdout or b"") + (proc.stderr or b"")
@@ -181,15 +182,17 @@ def generate_esp_cube_commands(
 
 
 def generate_rdg_cube_commands(
-    grid_spacing: float = 0.15,
+    grid: str = "medium",
+    grid_spacing: Optional[float] = None,
     profile: Optional[Dict] = None,
 ) -> str:
-    """生成 RDG/NCI 弱相互作用分析的 stdin 命令序列。
+    """生成 RDG/NCI 弱相互作用分析并导出双 cube (func1.cub / func2.cub) 的 stdin 命令序列。
 
-    菜单路径：20 (weak interaction) → 1 (NCI) → 4 (manual grid by spacing) → spacing
+    菜单路径：20 (weak interaction) → 1 (NCI) → [grid_num 或 4/spacing] → 3 (导出 cube) → 0 → 0 → q
 
     Args:
-        grid_spacing: 网格间距（默认 0.15 Bohr）
+        grid: 预设网格档位 coarse/medium/fine（与 run_rdg_cube_batch 实测一致）
+        grid_spacing: 可选手动间距（若指定，则使用子选项 4 + 间距）
         profile: 菜单 profile
 
     Returns:
@@ -200,17 +203,22 @@ def generate_rdg_cube_commands(
 
     menus = profile["menus"]
     nci_cfg = profile["weak_interaction"]
+    grid_num = profile["grid_options"].get(grid, 2)
 
     commands = [
         str(menus["weak_interaction"]),           # 20 → weak interaction
         str(nci_cfg["nci_option"]),                # 1 → NCI
-        str(nci_cfg["manual_grid_spacing"]),      # 4 → manual grid by spacing
-        str(grid_spacing),                         # 网格间距
     ]
-    # 注意：RDG 计算完成后会进入后处理菜单，导出 cube 的子菜单数字
-    # 需要实际 smoke test 后补充到 profile
-    # 暂时只生成到计算步骤，导出步骤待验证
-    commands.append("q")
+    if grid_spacing is not None:
+        commands.extend([str(nci_cfg["manual_grid_spacing"]), str(grid_spacing)])
+    else:
+        commands.append(str(grid_num))
+    commands.extend([
+        "3",   # output func1.cub / func2.cub
+        "0",   # exit NCI post-processing
+        "0",   # return to main menu
+        "q",
+    ])
     return "\n".join(commands) + "\n"
 
 
@@ -270,6 +278,7 @@ def run_orbital_cube_batch(
             stdin=stdin_h,
             stdout=log_h,
             stderr=subprocess.STDOUT,
+            close_fds=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             shell=False,
         )
@@ -360,6 +369,7 @@ def run_esp_cube_batch(
             stdin=stdin_h,
             stdout=log_h,
             stderr=subprocess.STDOUT,
+            close_fds=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             shell=False,
         )
@@ -417,18 +427,7 @@ def run_rdg_cube_batch(
     work_dir = Path(work_dir) if work_dir else fchk_path.parent
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    profile = load_profile()
-    grid_num = profile["grid_options"].get(grid, 2)
-
-    commands = "\n".join([
-        "20",   # weak interaction
-        "1",    # NCI/RDG
-        str(grid_num),
-        "3",    # output func1.cub / func2.cub
-        "0",    # exit NCI post-processing
-        "0",    # return to main menu
-        "q",
-    ]) + "\n"
+    commands = generate_rdg_cube_commands(grid=grid)
 
     cmd_file = work_dir / "multiwfn_rdg_commands.txt"
     cmd_file.write_text(commands, encoding="utf-8")
@@ -443,6 +442,7 @@ def run_rdg_cube_batch(
             stdin=stdin_h,
             stdout=log_h,
             stderr=subprocess.STDOUT,
+            close_fds=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             shell=False,
         )

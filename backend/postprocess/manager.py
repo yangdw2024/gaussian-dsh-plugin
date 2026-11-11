@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -13,6 +15,7 @@ from typing import Dict, List, Optional
 
 from ..config import settings
 from ..resource_scheduler import chem_scheduler, ResourceBusyError
+from ..security import get_allowed_write_roots, validate_safe_path
 from .gaussian_tools import ensure_fchk
 from .models import ArtifactInfo, PostprocessRequest, PostprocessTask
 from .multiwfn import (
@@ -26,15 +29,28 @@ class PostprocessManager:
     """后处理任务管理器（单例）。"""
 
     def __init__(self) -> None:
-        self.tasks_dir = settings.data_dir / "postprocess"
-        self.tasks_dir.mkdir(parents=True, exist_ok=True)
+        _ = self.tasks_dir
+
+    @property
+    def tasks_dir(self) -> Path:
+        env_dir = os.environ.get("GAUSSIAN_DATA_DIR")
+        base = Path(env_dir) if env_dir else settings.data_dir
+        d = base / "postprocess"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     def _task_file(self, task_id: str) -> Path:
-        return self.tasks_dir / f"{task_id}.json"
+        clean_id = (task_id or "").strip()
+        if not clean_id or not re.fullmatch(r"[\w.-]+", clean_id):
+            raise ValueError(f"非法后处理任务 ID：{task_id!r}")
+        return self.tasks_dir / f"{clean_id}.json"
 
     def _save(self, task: PostprocessTask) -> None:
-        with open(self._task_file(task.task_id), "w", encoding="utf-8") as f:
+        target = self._task_file(task.task_id)
+        tmp = target.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(task.model_dump(), f, ensure_ascii=False, indent=2)
+        os.replace(tmp, target)
 
     def _load(self, task_id: str) -> Optional[PostprocessTask]:
         path = self._task_file(task_id)
@@ -138,19 +154,42 @@ class PostprocessManager:
         self._save(task)
         return task
 
-    def resolve_source(self, req: PostprocessRequest) -> Path:
+    def resolve_source(
+        self,
+        req: PostprocessRequest,
+        work_dir: Optional[Path] = None,
+        enforce_sandbox: bool = False,
+    ) -> Path:
         """解析输入源：chk_path / fchk_path / job_id → fchk 路径。"""
+        def _is_writable_parent(path_obj: Path) -> bool:
+            resolved_parent = path_obj.expanduser().resolve().parent
+            for root in get_allowed_write_roots():
+                try:
+                    resolved_parent.relative_to(root)
+                    return True
+                except ValueError:
+                    continue
+            return False
+
+        def _convert_chk(chk_p: Path) -> Path:
+            sibling_fchk = chk_p.with_suffix(".fchk")
+            if sibling_fchk.exists() and sibling_fchk.stat().st_mtime > chk_p.stat().st_mtime:
+                return ensure_fchk(chk_p, fchk_path=sibling_fchk) if enforce_sandbox else ensure_fchk(chk_p)
+            if work_dir is not None and not _is_writable_parent(chk_p):
+                return ensure_fchk(chk_p, fchk_path=work_dir / f"{chk_p.stem}.fchk")
+            return ensure_fchk(chk_p)
+
         # 直接指定 fchk
         if req.fchk_path:
-            p = Path(req.fchk_path)
+            p = validate_safe_path(req.fchk_path, must_exist=True, mode="read") if enforce_sandbox else Path(req.fchk_path)
             if not p.exists():
                 raise FileNotFoundError(f"fchk 文件不存在：{p}")
             return p
 
         # 直接指定 chk（自动 formchk）
         if req.chk_path:
-            p = Path(req.chk_path)
-            return ensure_fchk(p)
+            p = validate_safe_path(req.chk_path, must_exist=True, mode="read") if enforce_sandbox else Path(req.chk_path)
+            return _convert_chk(p)
 
         # 从 Gaussian job_id 解析
         if req.job_id:
@@ -161,11 +200,11 @@ class PostprocessManager:
             if not job.get("normal_termination", False) and job.get("status") != "completed":
                 raise ValueError(f"Gaussian 任务 {req.job_id} 未完成，无法后处理")
             chk_path = Path(job["chk_path"])
-            return ensure_fchk(chk_path)
+            return _convert_chk(chk_path)
 
         raise ValueError("必须提供 fchk_path / chk_path / job_id 之一")
 
-    def run_task(self, task_id: str, req: PostprocessRequest) -> Dict:
+    def run_task(self, task_id: str, req: PostprocessRequest, enforce_sandbox: bool = False) -> Dict:
         """执行后处理任务。
 
         使用 ChemComputeScheduler 获取 lease，执行 Multiwfn/VMD 流水线。
@@ -211,25 +250,31 @@ class PostprocessManager:
             task.started_at = time.time()
             self._save(task)
 
-            # 解析输入源
-            fchk_path = self.resolve_source(req)
+            if req.orbital_isovalue <= 0 or req.density_isovalue <= 0:
+                raise ValueError("等值面阈值 (orbital_isovalue / density_isovalue) 必须为正数")
+
+            # M6: 产物统一放到 data_dir/postprocess/<task_id>，使其纳入 GC 扫描范围；
+            # 不再散落在用户 work_dir（那里 GC 不扫，MO SVG 等会永久残留）。
+            work_dir = self.tasks_dir / task_id
+            work_dir.mkdir(parents=True, exist_ok=True)
+
+            # 解析输入源（若从只读目录传 chk，converted fchk 自动输出至受控 work_dir）
+            fchk_path = self.resolve_source(req, work_dir=work_dir, enforce_sandbox=enforce_sandbox)
             task.source = str(fchk_path)
             self._save(task)
 
             # 加载 profile
             profile = load_profile()
 
-            # M6: 产物统一放到 data_dir/postprocess/<task_id>，使其纳入 GC 扫描范围；
-            # 不再散落在用户 work_dir（那里 GC 不扫，MO SVG 等会永久残留）。
-            work_dir = settings.data_dir / "postprocess" / task_id
-            work_dir.mkdir(parents=True, exist_ok=True)
-
             artifacts: List[ArtifactInfo] = []
             final_status = "completed"
 
             if req.kind == "orbitals":
                 # 确定轨道编号
-                orbitals = req.orbitals or []
+                orbitals = list(req.orbitals) if req.orbitals else []
+                for orb_num in orbitals:
+                    if int(orb_num) <= 0:
+                        raise ValueError(f"轨道编号必须为正整数（1-based），收到：{orb_num}")
                 if req.orbital_labels:
                     from ..fchk_reader import read_fchk_orbital_info
                     orb_info = read_fchk_orbital_info(fchk_path)
@@ -257,6 +302,8 @@ class PostprocessManager:
                     work_dir=work_dir,
                 )
                 for c in cubes:
+                    # INC-002 修复：送入 VMD 之前强校验 cube header 网格点数上限
+                    self.verify_cube_within_limit(c)
                     artifacts.append(ArtifactInfo(
                         name=c.name, path=str(c), kind="chemical/cube",
                         size_bytes=c.stat().st_size,
@@ -296,6 +343,7 @@ class PostprocessManager:
                     work_dir=work_dir,
                 )
                 for c in (density_cube, esp_cube):
+                    self.verify_cube_within_limit(c)
                     artifacts.append(ArtifactInfo(
                         name=c.name, path=str(c), kind="chemical/cube",
                         size_bytes=c.stat().st_size,
@@ -311,6 +359,7 @@ class PostprocessManager:
                         density_cube=density_cube,
                         esp_cube=esp_cube,
                         output_path=png,
+                        density_isovalue=req.density_isovalue,
                     )
                     artifacts.append(ArtifactInfo(
                         name=out.name, path=str(out), kind="image/png",
@@ -333,6 +382,7 @@ class PostprocessManager:
                     work_dir=work_dir,
                 )
                 for c in (signrho_cube, rdg_cube):
+                    self.verify_cube_within_limit(c)
                     artifacts.append(ArtifactInfo(
                         name=c.name, path=str(c), kind="chemical/cube",
                         size_bytes=c.stat().st_size,

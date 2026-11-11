@@ -135,6 +135,10 @@ def _build_route(req: GaussianInputRequest) -> Tuple[str, List[str]]:
         warnings.append("纯 freq 任务要求输入结构已是驻点；若非优化后结构，频率结果无意义。")
     if "td" in route_lower and "opt" in route_lower:
         warnings.append("TDDFT 激发态优化（TD opt）计算量大，建议先基态优化再做 TD 单点。")
+    if basis_l in {"gen", "genecp"} and not (req.append_text and req.append_text.strip()):
+        warnings.append("使用 Gen/GenECP 自定义基组时必须在 append_text 附加段内完整提供基组/赝势定义（仅列 BSE 元数据不足以供 Gaussian 读取）。")
+    if "td" in route_lower:
+        warnings.append("TDDFT 计算给出光学垂直激发能，不应直接与基态 KS HOMO-LUMO 轨道能隙混用。")
 
     route = " ".join(parts)
     return route, warnings

@@ -103,10 +103,16 @@ class TestMCPProtocolStdio(unittest.TestCase):
             "get_gaussian_job_status",
             "list_gaussian_jobs",
             "stop_gaussian_calculation",
+            "extract_structure_from_file",
+            "postprocess_capabilities",
+            "create_postprocess_task",
+            "get_postprocess_task",
+            "list_postprocess_tasks",
         ]
         for expected in expected_tools:
             self.assertIn(expected, tool_names, f"Tool '{expected}' not found in registered tools")
-        self.assertEqual(len(tool_names), 12)
+        extra = set(tool_names) - set(expected_tools)
+        self.assertTrue(extra.issubset({"sobko_search", "sobko_fetch"}), f"Unexpected tools: {extra}")
 
         # 4. Call gaussian_status
         status_resp = self.send_rpc("tools/call", {

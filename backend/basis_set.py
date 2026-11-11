@@ -98,6 +98,8 @@ class BasisSetClient:
                 "function_types": meta.get("function_types", []),
                 "latest_version": latest,
                 "elements": [int(e) for e in version_elements if str(e).isdigit()],
+                "metadata_only": True,
+                "note": "Metadata index only; call get_basis_set for full Gaussian94 definition required by Gen/GenECP.",
             })
         return sorted(results, key=lambda x: x["name"].lower())
 

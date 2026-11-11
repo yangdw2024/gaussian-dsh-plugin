@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
+import threading
+import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 # Configure logging strictly to sys.stderr so stdout remains 100% clean for JSON-RPC
 logging.basicConfig(
@@ -24,7 +27,7 @@ logger = logging.getLogger("gaussian-mcp-server")
 from mcp.server.fastmcp import FastMCP
 
 from .basis_set import basis_set_client
-from .config import settings
+from .config import SERVICE_VERSION, settings
 from .execution_policy import (
     evaluate_real_execution_authorization,
     run_preflight_check,
@@ -34,6 +37,9 @@ from .gaussian_output import output_to_dict, parse_gaussian_log
 from .job_manager import job_manager
 from .keywords import get_all_categories, get_category, search_keywords
 from .memory_guard import memory_guard
+from .postprocess.manager import postprocess_manager
+from .postprocess.models import PostprocessRequest
+from .postprocess.multiwfn import probe_version as mwfn_probe_version
 from .resource_scheduler import chem_scheduler
 from .security import (
     get_allowed_read_roots,
@@ -48,15 +54,45 @@ from .smiles.models import (
 )
 from .smiles.rdkit_builder import smiles_to_3d
 from .sobko_client import sobko_client
+from .structure_reader import extract_smiles_from_file
+
+try:
+    from .mcp_sobko_ext import register_sobko_tools
+except Exception as _sobko_imp_err:
+    logger.warning("Failed to import optional Sobko MCP extension: %s", _sobko_imp_err)
+    register_sobko_tools = None
 
 # Initialize FastMCP Server instance
 mcp = FastMCP(
     name="Gaussian Computational Chemistry Server",
     instructions=(
         "Standard Model Context Protocol server providing Gaussian 16 computational chemistry "
-        "workflows: input generation (.gjf), output parsing (.log/.out), error diagnosis, and environment status."
+        "workflows: input generation (.gjf), SMILES/structure extraction, output parsing (.log/.out), "
+        "error diagnosis, basis sets, serial job control, and Multiwfn/VMD/formchk post-processing."
     ),
 )
+
+CORE_TOOL_NAMES = (
+    "gaussian_status",
+    "generate_gaussian_input",
+    "parse_gaussian_output",
+    "diagnose_gaussian_error",
+    "search_gaussian_keywords",
+    "search_basis_sets",
+    "get_basis_set",
+    "generate_gaussian_input_from_smiles",
+    "submit_gaussian_calculation",
+    "get_gaussian_job_status",
+    "list_gaussian_jobs",
+    "stop_gaussian_calculation",
+    "extract_structure_from_file",
+    "postprocess_capabilities",
+    "create_postprocess_task",
+    "get_postprocess_task",
+    "list_postprocess_tasks",
+)
+
+_sobko_ext_state: Dict[str, Any] = {"registered": False, "tools": [], "enabled": False}
 
 
 # ==============================================================================
@@ -76,6 +112,10 @@ def gaussian_status() -> Dict[str, Any]:
 
     formchk_path = settings.formchk_exe
     formchk_exists = bool(formchk_path and formchk_path.exists())
+    multiwfn_path = settings.multiwfn_exe
+    multiwfn_exists = bool(multiwfn_path and Path(multiwfn_path).exists())
+    vmd_path = settings.vmd_exe
+    vmd_exists = bool(vmd_path and Path(vmd_path).exists())
 
     sobko_info = sobko_client.is_available()
     lease = chem_scheduler.current_lease()
@@ -84,7 +124,8 @@ def gaussian_status() -> Dict[str, Any]:
 
     return {
         "status": "ok",
-        "server_version": "0.2.0",
+        "server_version": SERVICE_VERSION,
+        "core_tools_count": len(CORE_TOOL_NAMES),
         "transport": "stdio",
         "gaussian": {
             "exe": str(settings.gaussian_exe),
@@ -93,6 +134,12 @@ def gaussian_status() -> Dict[str, Any]:
         "formchk": {
             "exe": str(formchk_path) if formchk_path else None,
             "exists": formchk_exists,
+        },
+        "postprocess": {
+            "formchk_exists": formchk_exists,
+            "multiwfn_exists": multiwfn_exists,
+            "vmd_exists": vmd_exists,
+            "max_grid_points": settings.postprocess_max_grid_points,
         },
         "directories": {
             "work_dir": str(settings.work_dir),
@@ -106,6 +153,9 @@ def gaussian_status() -> Dict[str, Any]:
             "max_atoms": settings.max_atoms,
         },
         "sobko_knowledge_base": sobko_info,
+        "optional_extensions": {
+            "sobko": dict(_sobko_ext_state),
+        },
         "active_compute_lease": {
             "held": lease is not None,
             "kind": lease.kind if lease else None,
@@ -584,6 +634,11 @@ def generate_gaussian_input_from_smiles(
     )
 
     result = generate_gjf(ginput)
+    if (job_type or "").strip().lower() == "sp":
+        result.setdefault("warnings", []).append(
+            "该输入直接以 RDKit MMFF94s 初始构象执行单点能计算 (sp)，"
+            "力场几何不代表 DFT 平衡结构，能量仅作近似参考。"
+        )
     result["atoms"] = [[a.element, a.x, a.y, a.z] for a in mol3d.atoms]
     result["smiles_info"] = {
         "canonical_smiles": mol3d.canonical_smiles,
@@ -592,6 +647,11 @@ def generate_gaussian_input_from_smiles(
         "spin_inference": mol3d.spin_inference,
         "converged_conformers": mol3d.converged_conformers,
         "mmff_energy": mol3d.mmff_energy,
+        "mmff_energy_unit": "kcal/mol (MMFF94s force-field energy, NOT quantum electronic Hartree energy)",
+        "geometry_disclaimer": (
+            "3D coordinates generated by RDKit ETKDGv3 + MMFF94s force field are an initial guess only, "
+            "NOT a DFT/ab initio equilibrium geometry."
+        ),
         "warnings": mol3d.warnings,
     }
 
@@ -898,6 +958,317 @@ def stop_gaussian_calculation(
         res["execution_mode"] = res["job"].get("execution_mode") or ("mock_simulation" if is_sim else "gaussian16")
         res["simulation_warning"] = res["job"].get("simulation_warning")
     return res
+
+
+# ==============================================================================
+# Tool 13: extract_structure_from_file
+# ==============================================================================
+@mcp.tool()
+def extract_structure_from_file(
+    file_path: str,
+) -> Dict[str, Any]:
+    """Extract a canonical SMILES string and atom count guess from a chemical structure or Gaussian file.
+
+    Supported formats inside authorized read boundaries:
+    - Molecular files: .mol, .sdf, .sd, .mol2, .pdb, .xyz, .cdxml (OpenBabel with RDKit fallback)
+    - Gaussian inputs: .gjf (Cartesian coordinate block)
+    - Gaussian outputs: .out, .log (final Standard/Input orientation coordinate block)
+
+    Parameters:
+        file_path: Path to the structure/calculation file inside authorized read roots.
+
+    Returns:
+        Structured dictionary with ok, file_path, smiles, source_format, source_file,
+        natoms_guess, extractor ('openbabel' or 'rdkit_fallback'), and warnings.
+    """
+    if not file_path or not file_path.strip():
+        raise ValueError("Parameter 'file_path' must not be empty.")
+
+    safe_path = validate_safe_path(file_path.strip(), must_exist=True, mode="read")
+    result = extract_smiles_from_file(str(safe_path))
+    return {
+        "ok": True,
+        "file_path": str(safe_path),
+        **result,
+    }
+
+
+# ==============================================================================
+# Tool 14: postprocess_capabilities
+# ==============================================================================
+@mcp.tool()
+def postprocess_capabilities() -> Dict[str, Any]:
+    """Probe post-processing tool readiness (formchk, Multiwfn, VMD) and grid safety limits.
+
+    Detects real Multiwfn banner version via probe_version() without hardcoding versions,
+    and reports supported post-processing workflows ('orbitals', 'esp', 'rdg', 'mo_levels').
+    """
+    formchk_ok = bool(settings.formchk_exe and Path(settings.formchk_exe).exists())
+    multiwfn_ok = bool(settings.multiwfn_exe and Path(settings.multiwfn_exe).exists())
+    vmd_ok = bool(settings.vmd_exe and Path(settings.vmd_exe).exists())
+
+    detected_version = mwfn_probe_version() if multiwfn_ok else None
+    expected_main = str(settings.expected_multiwfn_version or "3.8").split(".")[0]
+    detected_main = detected_version.split(".")[0] if detected_version else None
+    version_matched = detected_main == expected_main if detected_version else False
+
+    return {
+        "ok": True,
+        "formchk": {
+            "exists": formchk_ok,
+            "path": str(settings.formchk_exe) if settings.formchk_exe else None,
+        },
+        "multiwfn": {
+            "exists": multiwfn_ok,
+            "path": str(settings.multiwfn_exe) if settings.multiwfn_exe else None,
+            "version": detected_version,
+            "expected_version": settings.expected_multiwfn_version,
+            "version_matched": version_matched,
+        },
+        "vmd": {
+            "exists": vmd_ok,
+            "path": str(settings.vmd_exe) if settings.vmd_exe else None,
+        },
+        "max_grid_points": settings.postprocess_max_grid_points,
+        "supported_kinds": ["orbitals", "esp", "rdg", "mo_levels"],
+        "supported_grids": ["coarse", "medium", "fine"],
+    }
+
+
+# ==============================================================================
+# Tool 15: create_postprocess_task
+# ==============================================================================
+@mcp.tool()
+def create_postprocess_task(
+    kind: Literal["orbitals", "esp", "rdg", "mo_levels"],
+    job_id: Optional[str] = None,
+    fchk_path: Optional[str] = None,
+    chk_path: Optional[str] = None,
+    orbitals: Optional[List[int]] = None,
+    orbital_labels: Optional[List[Literal["HOMO", "LUMO"]]] = None,
+    grid: Literal["coarse", "medium", "fine"] = "medium",
+    orbital_isovalue: float = 0.02,
+    density_isovalue: float = 0.001,
+    render: bool = True,
+    wait: bool = False,
+    wait_timeout_seconds: float = 120.0,
+) -> Dict[str, Any]:
+    """Create and schedule a Multiwfn / VMD / MO-level post-processing task with sandbox & grid guards.
+
+    Provide exactly one input source among job_id, fchk_path, or chk_path.
+    - 'orbitals': Multiwfn orbital cube generation + optional VMD isosurface rendering
+    - 'esp': Multiwfn density + total ESP cubes + optional VMD electrostatic surface rendering
+    - 'rdg': Multiwfn NCI/RDG analysis cubes + optional VMD rendering
+    - 'mo_levels': Direct orbital energy level diagram (.svg) via fchk_reader
+
+    Parameters:
+        kind: Post-processing task type ('orbitals', 'esp', 'rdg', 'mo_levels').
+        job_id: Completed Gaussian job ID whose checkpoint will be converted/read.
+        fchk_path: Path to formatted checkpoint (.fchk/.fch) inside authorized read boundaries.
+        chk_path: Path to binary checkpoint (.chk) inside authorized read boundaries.
+        orbitals: Optional list of positive 1-based orbital indices for 'orbitals' mode.
+        orbital_labels: Optional ['HOMO', 'LUMO'] labels auto-resolved from fchk.
+        grid: Cube grid resolution ('coarse', 'medium', 'fine').
+        orbital_isovalue: Positive isovalue for orbital rendering (default 0.02).
+        density_isovalue: Positive isovalue for ESP surface rendering (default 0.001).
+        render: Whether to run VMD rendering after cube generation (default True).
+        wait: If True, waits up to wait_timeout_seconds for task completion before returning.
+        wait_timeout_seconds: Maximum synchronous wait time in seconds when wait=True (max 300s).
+
+    Returns:
+        Structured dictionary with ok, task_id, status, artifacts (when ready), or error.
+    """
+    sources = [bool(job_id and job_id.strip()), bool(fchk_path and fchk_path.strip()), bool(chk_path and chk_path.strip())]
+    if sum(sources) != 1:
+        raise ValueError("Provide exactly one input source among 'job_id', 'fchk_path', or 'chk_path'.")
+
+    safe_fchk: Optional[str] = None
+    safe_chk: Optional[str] = None
+    clean_job_id: Optional[str] = None
+
+    if fchk_path:
+        safe_fchk = str(validate_safe_path(fchk_path.strip(), must_exist=True, mode="read"))
+    if chk_path:
+        safe_chk = str(validate_safe_path(chk_path.strip(), must_exist=True, mode="read"))
+    if job_id:
+        clean_job_id = job_id.strip()
+        if not re.fullmatch(r"[\w.-]+", clean_job_id):
+            raise ValueError(f"Invalid job_id format: {job_id!r}")
+        job_info = job_manager.get_job(clean_job_id, log_tail_lines=0)
+        if not job_info:
+            raise FileNotFoundError(f"Gaussian job '{clean_job_id}' does not exist.")
+        if not job_info.get("normal_termination", False) and job_info.get("status") != "completed":
+            raise ValueError(f"Gaussian job '{clean_job_id}' is not completed (status={job_info.get('status')}).")
+        chk_candidate = job_info.get("chk_path")
+        if not chk_candidate:
+            raise ValueError(f"Gaussian job '{clean_job_id}' has no recorded chk_path.")
+        validate_safe_path(chk_candidate, must_exist=True, mode="read")
+
+    if orbitals is not None:
+        if any(int(o) <= 0 for o in orbitals):
+            raise ValueError("All entries in 'orbitals' must be positive 1-based integers.")
+    if orbital_isovalue <= 0 or density_isovalue <= 0:
+        raise ValueError("'orbital_isovalue' and 'density_isovalue' must be positive.")
+
+    req = PostprocessRequest(
+        kind=kind,
+        job_id=clean_job_id,
+        fchk_path=safe_fchk,
+        chk_path=safe_chk,
+        orbitals=orbitals,
+        orbital_labels=orbital_labels,
+        grid=grid,
+        orbital_isovalue=orbital_isovalue,
+        density_isovalue=density_isovalue,
+        render=render,
+    )
+
+    if kind in ("orbitals", "esp", "rdg"):
+        postprocess_manager._check_grid_points(req)
+
+    if not memory_guard.can_accept_compute():
+        snap = memory_guard.snapshot()
+        return {
+            "ok": False,
+            "error": (
+                f"Backend memory reached hard limit (RSS {snap['rss_mb']}MB >= {snap['hard_mb']}MB); "
+                "refusing new post-processing task."
+            ),
+        }
+
+    lease = chem_scheduler.current_lease()
+    if lease is not None:
+        return {
+            "ok": False,
+            "error": f"Compute resource is currently busy (held by {lease.owner_id} for {lease.kind}).",
+        }
+
+    task = postprocess_manager.create_task(req)
+
+    def _runner(tid: str, request: PostprocessRequest) -> None:
+        try:
+            postprocess_manager.run_task(tid, request, enforce_sandbox=True)
+        except Exception as exc:
+            try:
+                loaded = postprocess_manager._load(tid)
+                if loaded and loaded.status not in ("completed", "failed"):
+                    loaded.status = "failed"
+                    loaded.error = f"Unhandled background error: {exc}"
+                    loaded.finished_at = time.time()
+                    postprocess_manager._save(loaded)
+            except Exception:
+                pass
+
+    worker = threading.Thread(
+        target=_runner,
+        args=(task.task_id, req),
+        daemon=True,
+        name=f"mcp-pp-{task.task_id}",
+    )
+    worker.start()
+
+    if wait:
+        bounded_wait = min(max(0.5, float(wait_timeout_seconds)), 300.0)
+        worker.join(timeout=bounded_wait)
+        latest = postprocess_manager.get_task(task.task_id) or task.model_dump()
+        return {
+            "ok": latest.get("status") != "failed",
+            "completed": latest.get("status") == "completed",
+            "timed_out": worker.is_alive() and latest.get("status") not in ("completed", "failed"),
+            "task_id": task.task_id,
+            "task": latest,
+        }
+
+    return {
+        "ok": True,
+        "task_id": task.task_id,
+        "status": task.status,
+        "kind": task.kind,
+        "poll_tool": "get_postprocess_task",
+        "message": "Post-processing task scheduled; poll get_postprocess_task for completion and artifacts.",
+    }
+
+
+# ==============================================================================
+# Tool 16: get_postprocess_task
+# ==============================================================================
+@mcp.tool()
+def get_postprocess_task(
+    task_id: str,
+) -> Dict[str, Any]:
+    """Query status, error details, logs, and generated artifact files of a post-processing task.
+
+    Parameters:
+        task_id: Identifier of the post-processing task.
+
+    Returns:
+        Structured dictionary with ok and task details (status, artifacts, logs, error).
+    """
+    clean_id = (task_id or "").strip()
+    if not clean_id or not re.fullmatch(r"[\w.-]+", clean_id):
+        raise ValueError(f"Invalid parameter 'task_id': {task_id!r}")
+
+    task = postprocess_manager.get_task(clean_id)
+    if not task:
+        return {
+            "ok": False,
+            "task_id": clean_id,
+            "error": f"Post-processing task '{clean_id}' not found.",
+        }
+    return {
+        "ok": True,
+        "task_id": clean_id,
+        "status": task.get("status"),
+        "kind": task.get("kind"),
+        "task": task,
+    }
+
+
+# ==============================================================================
+# Tool 17: list_postprocess_tasks
+# ==============================================================================
+@mcp.tool()
+def list_postprocess_tasks(
+    limit: int = 50,
+    kind_filter: Optional[str] = None,
+    status_filter: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List recent post-processing tasks with optional filtering by kind or status.
+
+    Parameters:
+        limit: Maximum number of tasks to return (default: 50, max: 100).
+        kind_filter: Optional kind filter ('orbitals', 'esp', 'rdg', 'mo_levels').
+        status_filter: Optional status filter ('pending', 'running', 'completed', 'failed').
+
+    Returns:
+        Structured dictionary containing total_tasks, returned_tasks, and tasks list.
+    """
+    bounded_limit = min(max(1, int(limit)), 100)
+    all_tasks = postprocess_manager.list_tasks(limit=100)
+    filtered = all_tasks
+    if kind_filter and kind_filter.strip():
+        kf = kind_filter.strip().lower()
+        filtered = [t for t in filtered if (t.get("kind") or "").lower() == kf]
+    if status_filter and status_filter.strip():
+        sf = status_filter.strip().lower()
+        filtered = [t for t in filtered if (t.get("status") or "").lower() == sf]
+
+    page = filtered[:bounded_limit]
+    return {
+        "ok": True,
+        "total_tasks": len(all_tasks),
+        "returned_tasks": len(page),
+        "tasks": page,
+    }
+
+
+# Optional Sobko knowledge base extension (never breaks startup if Sobko is absent)
+try:
+    if register_sobko_tools is not None:
+        _sobko_ext_state.update(register_sobko_tools(mcp))
+except Exception as _ext_err:
+    logger.warning("Optional Sobko MCP extension initialization skipped: %s", _ext_err)
+    _sobko_ext_state = {"registered": False, "tools": [], "enabled": False, "error": str(_ext_err)}
 
 
 def main():

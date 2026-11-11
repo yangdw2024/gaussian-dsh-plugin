@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+SERVICE_VERSION: str = "0.2.0"
+
 
 def _env_bool(name: str, default: bool) -> bool:
     val = os.environ.get(name)
@@ -62,8 +64,6 @@ class Settings:
     sobko_python_exe: Optional[Path] = _env_path("SOBKO_PYTHON_EXE", None)
     # BSE 基组库 API
     bse_api_base: str = os.environ.get("BSE_API_BASE", "https://www.basissetexchange.org/api")
-    # 数据目录（任务数据库、日志）
-    data_dir: Path = Path(os.environ.get("GAUSSIAN_DATA_DIR", str(Path.home() / ".gaussian-dsh")))
 
     # ===== Multiwfn / VMD 后处理配置 =====
     multiwfn_exe: Optional[Path] = _env_path("MULTIWFN_EXE", r"D:\Multiwfn\Multiwfn_3.8_bin_Win64\Multiwfn.exe")
