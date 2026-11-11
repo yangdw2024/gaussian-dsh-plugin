@@ -18,3 +18,11 @@
 - [x] **OpenAI Codex CLI v0.148.0 隔离实机调用 (`task-2133`)**：使用临时 `CODEX_HOME`（不触碰 `~/.codex/config.toml`）通过 `gpt-5.6-sol`（`sandbox: read-only`, `--approve-for-me`）完成 4 项真实 MCP 调用（`gaussian_status`, `extract_structure_from_file`, `parse_gaussian_output`, `postprocess_capabilities`），`EXIT=0`。
 - [x] **兼容性矩阵文档**：创建 `docs/master_mission/COMPATIBILITY_MATRIX.md`；`claude`/`cursor` 如实标注 `NOT_RUN`。
 - [x] **全量 Python 回归**：修改 `backend/mcp_server.py` 后执行 `py312 -m unittest discover -s tests -v` -> `Ran 106 tests in 29.124s` (`OK`, `EXIT=0`)。
+
+## Phase 6 完成记录（2026-11-12）
+- [x] **统一版本升级 (`0.2.0 -> 0.3.0`)**：同步更新 `backend/config.py` (`SERVICE_VERSION = "0.3.0"`)、`src/index.js`、`package.json`、`scripts/deploy_runtime.ps1`、`tests/test_mcp_batch1.py`。
+- [x] **包名正式回归 `@yangdw2024/gp` 并提供兼容打包器 (`scripts/build_npm_packages.mjs`)**：同步更新 `package.json`、`cordis.patch.yml`、`src/client.js`、`lib/client.js` 及 `verify_*.mjs`；新增 `scripts/build_npm_packages.mjs` 同时产出 `yangdw2024-gp-0.3.0.tgz`（主发布包）与 `gd-gp-0.3.0.tgz`（短命名兼容包）。
+- [x] **Windows `MAX_PATH=260` 彻底根治**：
+  - `packaging/gaussian-backend.spec`：在 `EXE(...)` 启用 `contents_directory="."` 消除 `_internal/` 层级（节省 10 字符），扩展 `excludes` 并通过 `_keep_runtime_data` 裁剪 `rdkit/Contrib/`、`.dist-info/licenses/`、`.dist-info/sboms/`、`jsonschema_specifications/`、`setuptools/`、`_tcl_data/`、`_tk_data/`。
+  - `scripts/deploy_runtime.ps1`：将运行目录 `gaussian-backend` 缩短为 `b`（`runtimes/win32-x64/b/gaussian-backend.exe`，节省 15 字符），将文件总数由 `2150` 精简至 `1064`，包内最长相对路径由 `135` 字符降至 `96` 字符（`runtimes/win32-x64/b/rdkit.libs/RDKitEnumerateStereoisomers-*.dll`）。
+  - 模拟超长 `153` 字符 DSH 安装前缀离线 `npm install` 解包实测：1158 文件全部落盘，最长绝对路径 **`249` 字符 (`< 260`)**（真实 `147` 字符 `@yangdw2024/gp` 仅 `243` 字符），且深度目录启动 EXE (`version=0.3.0`, `/v1/molecules/from-smiles` 苯 3D, `/v1/admin/shutdown`) 全绿。

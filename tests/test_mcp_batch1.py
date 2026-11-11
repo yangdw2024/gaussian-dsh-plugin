@@ -16,7 +16,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.config import settings
+from backend.config import SERVICE_VERSION, settings
 from backend.mcp_server import mcp
 
 
@@ -42,7 +42,7 @@ class TestMCPBatch1(unittest.IsolatedAsyncioTestCase):
             data = json.loads(content[0].text)
 
         self.assertEqual(data["status"], "ok")
-        self.assertEqual(data["server_version"], "0.2.0")
+        self.assertEqual(data["server_version"], SERVICE_VERSION)
         self.assertIn("gaussian", data)
         self.assertIn("directories", data)
         self.assertIn("resource_budget", data)

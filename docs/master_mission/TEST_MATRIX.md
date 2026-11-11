@@ -24,3 +24,12 @@
 | Out-of-Repo Direct MCP Launch | `Popen python backend/mcp_server.py` from `C:\Users\Administrator` | **PASS (`RC=0`, `TOOL_COUNT=19`)** | 修复 `ImportError` 后实测 |
 | Codex CLI Isolated Live MCP | `OpenAI Codex v0.148.0` (`gpt-5.6-sol`, isolated `CODEX_HOME`) | **PASS (`EXIT=0`, 4 tools)** | `gaussian_status`, `extract_structure_from_file`, `parse_gaussian_output`, `postprocess_capabilities` |
 | Claude Desktop / Cursor IDE | — | **NOT_RUN** | 已提供配置模板 `examples/mcp_configs/` |
+
+### Phase 6 实测基线追加（2026-11-12）
+| 检查项 | 命令 / 方式 | 实测结果 | 备注 |
+| :--- | :--- | :--- | :--- |
+| PyInstaller Rebuild & Deploy (`0.3.0`) | `build_backend.ps1` + `deploy_runtime.ps1 -Version 0.3.0` | **PASS (`1064` files, max rel `96` chars)** | `EXE(..., contents_directory=".")` + `b/` |
+| EXE Smoke & RDKit `/v1/molecules/from-smiles` | `smoke_test_backend.ps1` + live HTTP test | **PASS (`version=0.3.0`, 0.5s boot)** | `c1ccccc1` 3D 生成正常 |
+| Compiled EXE Cross-Process Suite (`0.3.0`) | `py312 -m unittest tests.test_v52_compiled_cross_process -v` | **PASS (`5/5` OK, 13.033s)** | 使用 `b/gaussian-backend.exe` |
+| Dual npm Pack (`@yangdw2024/gp` + `@gd/gp`) | `node scripts/build_npm_packages.mjs` | **PASS (`64.7 MB` each, 1158 files)** | 模拟 147 字符 DSH 路径 `243 < 260` |
+| Isolated Deep-Path `npm install` + EXE Launch | `PREFIX_LEN=153`, `npm install --offline`, `verify_*`, live EXE | **PASS (`LONGEST=249 < 260`, `EXIT=0`)** | 形状/bundle/sha256/pydantic_core 全 PASS |

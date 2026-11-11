@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-SERVICE_VERSION: str = "0.2.0"
+SERVICE_VERSION: str = "0.3.0"
 
 
 def _env_bool(name: str, default: bool) -> bool:

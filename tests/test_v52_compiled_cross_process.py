@@ -28,7 +28,26 @@ from typing import Any, Dict, List, Optional
 import psutil
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-COMPILED_EXE = REPO_ROOT / "runtimes" / "win32-x64" / "gaussian-backend" / "gaussian-backend.exe"
+def _resolve_compiled_exe() -> Path:
+    rt_dir = REPO_ROOT / "runtimes" / "win32-x64"
+    rj = rt_dir / "runtime.json"
+    if rj.exists():
+        try:
+            exe_rel = json.loads(rj.read_text(encoding="utf-8-sig")).get("executable")
+            if exe_rel:
+                candidate = rt_dir / exe_rel
+                if candidate.exists():
+                    return candidate
+        except Exception:
+            pass
+    for rel in ("b/gaussian-backend.exe", "gaussian-backend/gaussian-backend.exe"):
+        candidate = rt_dir / rel
+        if candidate.exists():
+            return candidate
+    return rt_dir / "b" / "gaussian-backend.exe"
+
+
+COMPILED_EXE = _resolve_compiled_exe()
 
 H2_GJF = (
     "%mem=2GB\n"

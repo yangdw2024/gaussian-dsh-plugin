@@ -2,7 +2,7 @@
 # conversation surface; this out-of-tree layer contributes the Gaussian tools.
 - insert:
     - id: gaussian
-      name: '@gd/gp'
+      name: '@yangdw2024/gp'
       config:
         backendMode: !!js process.env.GAUSSIAN_BACKEND_MODE ?? 'managed'
         baseUrl: !!js process.env.GAUSSIAN_BACKEND_URL ?? 'http://127.0.0.1:8765'

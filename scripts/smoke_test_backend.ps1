@@ -11,6 +11,7 @@ Write-Host "=== Gaussian Backend Smoke Test ===" -ForegroundColor Cyan
 
 # 找 exe
 $exePaths = @(
+    "runtimes\win32-x64\b\gaussian-backend.exe",
     "runtimes\win32-x64\gaussian-backend\gaussian-backend.exe",
     "dist\gaussian-backend\gaussian-backend.exe",
     "dist\gaussian-backend.exe",

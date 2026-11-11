@@ -11,7 +11,7 @@
 # runtime.json 供前端 managed spawn 定位 exe 并做完整性校验。
 
 param(
-    [string]$Version = "0.2.0",
+    [string]$Version = "0.3.0",
     [string]$Python = "3.12.10"
 )
 
@@ -21,7 +21,11 @@ Set-Location $projectRoot
 
 $src = "dist\gaussian-backend"
 $runtimeDir = "runtimes\win32-x64"
-$dst = Join-Path $runtimeDir "gaussian-backend"
+$dst = Join-Path $runtimeDir "b"
+$legacyDst = Join-Path $runtimeDir "gaussian-backend"
+if (Test-Path $legacyDst) {
+    Remove-Item -Path $legacyDst -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 if (-not (Test-Path (Join-Path $src "gaussian-backend.exe"))) {
     Write-Host "ERROR: built exe not found. Run build_backend.ps1 first." -ForegroundColor Red
@@ -53,7 +57,7 @@ Get-ChildItem $dst -Recurse -File | ForEach-Object {
 $manifest = [ordered]@{
     version = $Version
     target  = "win32-x64"
-    executable = "gaussian-backend/gaussian-backend.exe"
+    executable = "b/gaussian-backend.exe"
     python  = $Python
     files   = $files
 }

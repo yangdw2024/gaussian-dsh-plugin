@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 // ============ 后端 HTTP 客户端 ============
 
 const SERVICE_NAME = "gaussian-dsh-backend";
-const SERVICE_VERSION = "0.2.0";
+const SERVICE_VERSION = "0.3.0";
 
 /**
  * R15: 包内 runtime 自定位 exe（对齐 aifs 官方架构）。
@@ -242,7 +242,7 @@ class BackendManager {
     const exe = this._resolveExecutable();
     if (!exe) {
       this.state = "failed";
-      this.error = "未找到 gaussian-backend.exe（runtimes/win32-x64/gaussian-backend/）";
+      this.error = "未找到 gaussian-backend.exe（runtimes/win32-x64/b/ 或 runtime.json executable 路径）";
       return;
     }
     let handle;

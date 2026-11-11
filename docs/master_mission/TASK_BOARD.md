@@ -36,3 +36,10 @@
   - `backend/mcp_server.py` 跨工作目录直接启动修复并回归验证（`106/106` tests `OK`）
   - `examples/mcp_configs/*` 与 `docs/master_mission/COMPATIBILITY_MATRIX.md` 已就绪（`claude` / `cursor` 标为 `NOT_RUN`）
 - 下一阶段：Phase 6（Windows `MAX_PATH=260` 彻底根治、版本升级至 `0.3.0`、后端与前端重新打包、隔离 `npm pack`/`install` 校验）
+
+### Phase 6 更新状态（2026-11-12）
+- Phase 6（Windows `MAX_PATH=260` 根治、版本升级至 `0.3.0`、前后端重建与隔离包安装实测）：**COMPLETED**
+  - `pyinstaller` + `deploy_runtime.ps1` 重建 `runtimes/win32-x64/b/gaussian-backend.exe`（`0.3.0`，1064 运行时文件，包内最长相对路径 `96` 字符）
+  - 离线包 `yangdw2024-gp-0.3.0.tgz` 与 `gd-gp-0.3.0.tgz` 已构建（`64.7 MB` / `153.0 MB` / `1158` files）
+  - 模拟 153 字符深度 DSH 前缀 `npm install --offline` 最长路径 `249 < 260`，且 EXE 在该深度目录启动 + RDKit `c1ccccc1` 建模 + 优雅关闭全通
+- 下一阶段：Phase 7（Agensi Agent Skills 升级、第 3 技能 `gaussian-postprocessing` 新增、内置独立无 MCP CLI 脚本与 `dist/agensi/*.zip` 构建校验）
