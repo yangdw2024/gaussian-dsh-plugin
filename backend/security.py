@@ -97,6 +97,28 @@ def get_allowed_read_roots() -> List[Path]:
     return unique
 
 
+_RESERVED_WIN_DEVICES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def _check_windows_path_hazards(raw_str: str, parsed: Path) -> None:
+    """Reject Windows ADS streams, device/UNC paths (NTLM leak), and reserved DOS device names."""
+    if raw_str.startswith("\\\\") or raw_str.startswith("//"):
+        raise PermissionError(f"Security Boundary Violation: UNC or device paths are forbidden ('{raw_str}').")
+    # Alternate Data Stream check: any ':' after optional C: drive prefix
+    colon_check = raw_str[2:] if (len(raw_str) >= 2 and raw_str[1] == ":" and raw_str[0].isalpha()) else raw_str
+    if ":" in colon_check:
+        raise ValueError(f"Invalid path: Windows Alternate Data Stream (:) detected in '{raw_str}'.")
+    if os.name == "nt":
+        for part in parsed.parts:
+            stem = part.split(".")[0].strip().upper()
+            if stem in _RESERVED_WIN_DEVICES:
+                raise ValueError(f"Invalid path: Reserved Windows device name '{stem}' is forbidden.")
+
+
 def validate_safe_path(
     target_path: str | Path,
     must_exist: bool = False,
@@ -115,8 +137,8 @@ def validate_safe_path(
         Canonical resolved Path object with all junctions/symlinks expanded.
 
     Raises:
-        ValueError: If target_path contains invalid characters (e.g. null bytes).
-        PermissionError: If resolved path falls outside authorized boundaries.
+        ValueError: If target_path contains invalid characters (e.g. null bytes, ADS, DOS device names).
+        PermissionError: If resolved path falls outside authorized boundaries or uses UNC paths.
         FileNotFoundError: If must_exist is True and file does not exist.
     """
     raw_str = str(target_path)
@@ -124,6 +146,7 @@ def validate_safe_path(
         raise ValueError("Invalid path: null byte detected.")
 
     p = Path(raw_str).expanduser()
+    _check_windows_path_hazards(raw_str, p)
 
     if not p.is_absolute():
         anchor = (base_dir or settings.work_dir).expanduser().resolve()

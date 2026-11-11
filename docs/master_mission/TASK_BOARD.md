@@ -18,8 +18,8 @@
 | `T2-06` | Phase 2 | 同步 `src/index.js` 工具描述与版本检查，新增 Phase 2 测试套件 | `PASS` | `Ran 89 tests in 33.962s — OK` (`EXIT=0`) |
 | `T3-01` | Phase 3 | 审计并加固 10 项计算化学科学正确性边界 | `PASS` | 加固 `gaussian_output.py` / `gaussian_input.py` / `basis_set.py` / `mcp_server.py` 并修复两项实测缺陷 |
 | `T3-02` | Phase 3 | 新增不完整日志、多步优化+频率、Post-HF 与单位歧义测试 | `PASS` | `tests/test_scientific_phase3.py` (10 项)，全量 `99/99 OK (24.597s, EXIT=0)` + `SCIENTIFIC_VALIDATION.md` |
-| `T4-01` | Phase 4 | 全读并审计 `execution_policy.py`、`job_manager.py`、`resource_scheduler.py`、`process_utils.py` | `TODO` | 逐条验证 21 项安全与稳定性清单 |
-| `T4-02` | Phase 4 | 修复发现的安全隐患并补充攻击面回归测试 | `TODO` | 输出 `SECURITY_AUDIT.md` |
+| `T4-01` | Phase 4 | 全读并审计 `execution_policy.py`、`job_manager.py`、`resource_scheduler.py`、`process_utils.py` | `PASS` | 静态全局扫描零高危调用，审计 `app.py`、`security.py`、`vmd.py`、`templates/*.tcl`、`artifact_gc.py`、`gaussian_input.py` |
+| `T4-02` | Phase 4 | 修复发现的安全隐患并补充攻击面回归测试 | `PASS` | 修复 ADS/UNC/DOS设备名、CRLF/chk注入、HTTP 403/413、GC symlink、SMILES 2000字符、PID<=0；`106/106 OK (34.167s, EXIT=0)` + `SECURITY_AUDIT.md` |
 | `T5-01` | Phase 5 | 隔离环境下验证 DSH 工具契约与 Codex CLI (`CODEX_HOME`) 调用 | `TODO` | 零污染正式配置 |
 | `T5-02` | Phase 5 | 生成 Claude Code / Cursor 标准化配置模板，标记未装客户端为 `NOT_RUN` | `TODO` | 输出 `COMPATIBILITY_MATRIX.md` |
 | `T6-01` | Phase 6 | 根治 Windows `MAX_PATH=260` 与 `@yangdw2024/gp` 包路径问题 | `TODO` | `LongPathsEnabled=0` 下完整验证 |

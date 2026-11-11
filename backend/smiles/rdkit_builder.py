@@ -120,6 +120,9 @@ def smiles_to_3d(req: Smiles3DRequest) -> Smiles3DResponse:
     """
     warnings: List[str] = []
 
+    if len(req.smiles) > 2000:
+        raise ValueError(f"SMILES 长度 ({len(req.smiles)}) 超过安全限制 (2000 字符)")
+
     # Step 1: 解析与规范化
     mol = Chem.MolFromSmiles(req.smiles)
     if mol is None:

@@ -506,8 +506,9 @@ def api_extract_structure(req: StructureExtractRequest):
     .gjf（Cartesian 坐标）、.out/.log（最后一帧 orientation 坐标）。
     """
     from .structure_reader import extract_smiles_from_file
+    safe_p = _guard_http_read_path(req.file_path)
     try:
-        return extract_smiles_from_file(req.file_path)
+        return extract_smiles_from_file(str(safe_p))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except (ValueError, RuntimeError) as e:
@@ -516,21 +517,54 @@ def api_extract_structure(req: StructureExtractRequest):
 
 # ============ 输出解析 ============
 
+def _guard_http_read_path(raw_path: str) -> Path:
+    """Block approvals secrets, UNC SMB paths, null bytes, and Windows ADS on HTTP read routes."""
+    if "\0" in raw_path:
+        raise HTTPException(status_code=400, detail="非法路径：包含空字节")
+    if raw_path.startswith("\\\\") or raw_path.startswith("//"):
+        raise HTTPException(status_code=403, detail="禁止访问 UNC 或设备路径")
+    colon_check = raw_path[2:] if (len(raw_path) >= 2 and raw_path[1] == ":" and raw_path[0].isalpha()) else raw_path
+    if ":" in colon_check:
+        raise HTTPException(status_code=400, detail="非法路径：禁止访问 NTFS Alternate Data Stream")
+    resolved = Path(raw_path).expanduser().resolve()
+    data_base = (Path(os.environ.get("GAUSSIAN_DATA_DIR") or settings.data_dir)).expanduser().resolve()
+    for restricted in {(data_base / "approvals").resolve(), (settings.data_dir / "approvals").resolve()}:
+        try:
+            resolved.relative_to(restricted)
+            raise HTTPException(status_code=403, detail="禁止通过 HTTP 接口读取人工授权密钥与凭证目录")
+        except ValueError:
+            continue
+    return resolved
+
+
 @app.post("/v1/gaussian-outputs/parse")
 def api_parse_output(req: ParseOutputRequest):
     """解析 Gaussian .log/.out 输出。"""
     content = req.content
     filename = req.filename or "gaussian.log"
+    max_log_mb = int(os.environ.get("GAUSSIAN_MAX_LOG_SIZE_MB", "100"))
+    max_bytes = max_log_mb * 1024 * 1024
 
     if not content and req.file_path:
-        path = Path(req.file_path)
+        path = _guard_http_read_path(req.file_path)
         if not path.exists():
             raise HTTPException(status_code=404, detail=f"文件不存在：{req.file_path}")
+        if path.stat().st_size > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"日志文件过大，超过限制 {max_log_mb} MB（防止 OOM）",
+            )
         content = path.read_text(encoding="utf-8", errors="ignore")
         filename = path.name
 
     if not content:
         raise HTTPException(status_code=400, detail="必须提供 content 或 file_path")
+
+    if len(content.encode("utf-8", errors="ignore")) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"日志文本过大，超过限制 {max_log_mb} MB（防止 OOM）",
+        )
 
     result = parse_gaussian_log(content, filename=filename)
     return output_to_dict(result)

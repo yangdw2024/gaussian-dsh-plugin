@@ -43,3 +43,8 @@
 - **发现阶段**: Phase 3 科学边界实测
 - **现象**: Step 1 `Normal termination` 后通过 `--Link1--` 进入 Step 2 但发生 `Error termination` 时，日志中若未重复打印 `Entering Link 1`，原判定未置 `incomplete_multistep=True` 与 `route_steps=2`。
 - **对策**: 联合统计 `--Link1--`、`Entering Link 1` 与 `#` Route 行定位最后步骤及误差位置，已由 `test_10_incomplete_multistep_link1_and_truncated_log` 验证通过。
+
+## INC-009: Phase 4 HTTP `/v1/gaussian-outputs/parse` 缺 `approvals` 封锁与大日志 OOM 阈值及 `settings.max_log_size_mb` 误假设
+- **发现阶段**: Phase 4 安全审计与回归验证
+- **现象**: (1) `api_parse_output` 与 `api_extract_structure` 直接读取 `req.file_path`，未封锁 `<data_dir>/approvals` 且无 100MB 体积上限；(2) 初版补丁假定 `Settings` 拥有 `max_log_size_mb` 字段导致 `AttributeError`（实际仅 `mcp_server.py` 硬编码 100MB）。
+- **对策**: 改用 `int(os.environ.get("GAUSSIAN_MAX_LOG_SIZE_MB", "100"))` 并抽取 `_guard_http_read_path()`，经 `test_04_http_parse_approvals_blocked_and_oom_size_guard` 实测返回 `403` 与 `413`。

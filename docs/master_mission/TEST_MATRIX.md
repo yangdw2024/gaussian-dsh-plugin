@@ -8,7 +8,7 @@
 | `v53-preaccept-preflight` | Phase 1 | `h2_sp_preaccept.gjf` SHA-256 与授权拒绝 | `PASS` | `1/1` | `0` | 干跑通过，负向人工令牌校验拦截，真实执行保持 `HUMAN_APPROVAL_REQUIRED` |
 | `phase2-mcp-17-and-postprocess` | Phase 2 | 17 核心工具 + Sobko 可选扩展 + 后处理加固 | `PASS` | `89/89` | `0` | 含 `CH3Cl.fchk` 真实 Multiwfn 3.8 + VMD 后处理联调通过 (`mo_levels.svg`, `orbital_0.png`) |
 | `phase3-scientific-correctness` | Phase 3 | 10 项计算化学边界与数据契约测试 (`test_scientific_phase3.py` + 全量回归) | `PASS` | `99/99` | `0` | 24.597s 干净通过，验证 SP/Opt/Post-HF/TD-DFT/虚频/Mock 隔离/Link1/BSE/RDKit 边界 |
-| `phase4-security-redteam` | Phase 4 | 21 项安全与稳定性攻防回归 | `TODO` | - | - | Junction/注入/重放/锁 |
+| `phase4-security-redteam` | Phase 4 | 安全与稳定性红队对抗回归 (`test_security_phase4.py` + 全量回归) | `PASS` | `106/106` | `0` | 34.167s；含真实 Windows `mklink /J`、ADS/UNC、Link0 注入、HTTP `403`/`413`、GC symlink 与 SMILES DoS |
 | `phase5-codex-mcp-live` | Phase 5 | Codex CLI 隔离 `CODEX_HOME` 实机协议调用 | `TODO` | - | - | 不改动 `~/.codex/config.toml` |
 | `phase5-claude-cursor` | Phase 5 | Claude Code / Cursor 实机测试 | `NOT_RUN` | `0/0` | `N/A` | 宿主机未安装 `claude` 与 `cursor` |
 | `phase6-pack-and-maxpath` | Phase 6 | `npm pack` + 隔离安装 + `<260` 路径校验 | `TODO` | - | - | `LongPathsEnabled=0` 下通过 |

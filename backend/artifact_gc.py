@@ -43,12 +43,20 @@ _SCAN_SUBDIRS = ["jobs", "postprocess", "logs"]
 
 
 def _iter_candidate_files(data_dir: Path) -> List[Path]:
+    root_resolved = data_dir.resolve()
     files: List[Path] = []
     for sub in _SCAN_SUBDIRS:
         root = data_dir / sub
-        if not root.exists():
+        if not root.exists() or root.is_symlink():
             continue
         for p in root.rglob("*"):
+            if p.is_symlink():
+                continue
+            try:
+                resolved = p.resolve()
+                resolved.relative_to(root_resolved)
+            except (OSError, ValueError):
+                continue
             if p.is_file():
                 files.append(p)
     return files
@@ -68,8 +76,10 @@ def sweep(dry_run: bool = False) -> Dict:
     freed = 0
     kept_protected = 0
     actions: List[Dict] = []
+    data_resolved = settings.data_dir.resolve()
+    candidates = _iter_candidate_files(settings.data_dir)
 
-    for p in _iter_candidate_files(settings.data_dir):
+    for p in candidates:
         ext = p.suffix.lower()
         if ext in _PROTECTED_EXT:
             kept_protected += 1
@@ -77,6 +87,14 @@ def sweep(dry_run: bool = False) -> Dict:
         ttl_days = _TTL_BY_EXT.get(ext)
         if ttl_days is None:
             # 不在回收清单内的类型（如未知扩展），保留不动
+            kept_protected += 1
+            continue
+        if p.is_symlink():
+            kept_protected += 1
+            continue
+        try:
+            p.resolve().relative_to(data_resolved)
+        except (OSError, ValueError):
             kept_protected += 1
             continue
         age_s = now - p.stat().st_mtime
@@ -98,7 +116,7 @@ def sweep(dry_run: bool = False) -> Dict:
             })
 
     return {
-        "scanned": len(_iter_candidate_files(settings.data_dir)),
+        "scanned": len(candidates),
         "deleted": deleted,
         "freed_bytes": freed,
         "kept_protected": kept_protected,
