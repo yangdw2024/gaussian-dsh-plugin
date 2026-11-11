@@ -33,3 +33,9 @@
 | Compiled EXE Cross-Process Suite (`0.3.0`) | `py312 -m unittest tests.test_v52_compiled_cross_process -v` | **PASS (`5/5` OK, 13.033s)** | 使用 `b/gaussian-backend.exe` |
 | Dual npm Pack (`@yangdw2024/gp` + `@gd/gp`) | `node scripts/build_npm_packages.mjs` | **PASS (`64.7 MB` each, 1158 files)** | 模拟 147 字符 DSH 路径 `243 < 260` |
 | Isolated Deep-Path `npm install` + EXE Launch | `PREFIX_LEN=153`, `npm install --offline`, `verify_*`, live EXE | **PASS (`LONGEST=249 < 260`, `EXIT=0`)** | 形状/bundle/sha256/pydantic_core 全 PASS |
+
+### Phase 7 实测基线追加（2026-11-12）
+| 检查项 | 命令 / 方式 | 实测结果 | 备注 |
+| :--- | :--- | :--- | :--- |
+| Agensi ZIP Pack & Audit | `py312 scripts/package_agensi_skills.py` | **PASS (3 ZIPs, 7556B / 6656B / 5643B)** | `SKILL.md` 位于 ZIP 根，零密钥/私人路径 |
+| Phase 7 Standalone Skills Tests | `py312 -m unittest tests.test_agensi_skills_phase7 -v` | **PASS (`4/4` OK, 0.242s)** | 实测 `gjf_helper.py`, `log_analyzer.py`, `multiwfn_recipe.py` 与 ZIP 构建 |

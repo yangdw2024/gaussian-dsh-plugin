@@ -3,12 +3,14 @@
     "gaussian": {
       "command": "python",
       "args": [
-        "<PATH_TO_GAUSSIAN_MCP_SERVER>/mcp_server.py"
+        "<PATH_TO_REPO>/mcp_server.py"
       ],
       "env": {
-        "GAUSSIAN_WORK_DIR": "<PATH_TO_YOUR_CALCULATION_DIRECTORY>",
-        "GAUSSIAN_DEFAULT_MEM": "12GB",
-        "GAUSSIAN_DEFAULT_NPROC": "8"
+        "GAUSSIAN_WORK_DIR": "<PATH_TO_WORK_DIR>",
+        "GAUSSIAN_DATA_DIR": "<PATH_TO_DATA_DIR>",
+        "GAUSSIAN_EXE": "<PATH_TO_G16_EXE>",
+        "FORMCHK_EXE": "<PATH_TO_FORMCHK_EXE>",
+        "GAUSSIAN_ALLOW_REAL_EXECUTION": "false"
       }
     }
   }

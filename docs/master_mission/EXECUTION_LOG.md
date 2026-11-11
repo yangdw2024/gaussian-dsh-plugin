@@ -26,3 +26,12 @@
   - `packaging/gaussian-backend.spec`：在 `EXE(...)` 启用 `contents_directory="."` 消除 `_internal/` 层级（节省 10 字符），扩展 `excludes` 并通过 `_keep_runtime_data` 裁剪 `rdkit/Contrib/`、`.dist-info/licenses/`、`.dist-info/sboms/`、`jsonschema_specifications/`、`setuptools/`、`_tcl_data/`、`_tk_data/`。
   - `scripts/deploy_runtime.ps1`：将运行目录 `gaussian-backend` 缩短为 `b`（`runtimes/win32-x64/b/gaussian-backend.exe`，节省 15 字符），将文件总数由 `2150` 精简至 `1064`，包内最长相对路径由 `135` 字符降至 `96` 字符（`runtimes/win32-x64/b/rdkit.libs/RDKitEnumerateStereoisomers-*.dll`）。
   - 模拟超长 `153` 字符 DSH 安装前缀离线 `npm install` 解包实测：1158 文件全部落盘，最长绝对路径 **`249` 字符 (`< 260`)**（真实 `147` 字符 `@yangdw2024/gp` 仅 `243` 字符），且深度目录启动 EXE (`version=0.3.0`, `/v1/molecules/from-smiles` 苯 3D, `/v1/admin/shutdown`) 全绿。
+
+## Phase 7 完成记录（2026-11-12）
+- [x] **三大 Agensi Standalone Skills (`v0.3.0`) 完成**：
+  - `skills/gaussian-job-setup/`（升级 `SKILL.md` + `templates/mcp-config.json` 指向 `<PATH_TO_REPO>/mcp_server.py` + 新增纯 stdlib CLI `scripts/gjf_helper.py`）
+  - `skills/gaussian-output-analysis/`（升级 `SKILL.md` + `templates/mcp-config.json` + 新增纯 stdlib CLI `scripts/log_analyzer.py`）
+  - `skills/gaussian-postprocessing/`（新增第 3 技能：Multiwfn 3.8 + VMD `formchk -> .cub -> .png` 工作流、`16,000,000` 格点上限守卫与 `scripts/multiwfn_recipe.py`）
+- [x] **自动化打包与 ZIP 根结构/脱敏校验 (`scripts/package_agensi_skills.py`)**：生成 `dist/agensi/{gaussian-job-setup,gaussian-output-analysis,gaussian-postprocessing}-v0.3.0.zip`（同步复制至 `dist/release-candidate/agensi/`），校验 `SKILL.md` 位于 ZIP 根目录、frontmatter 字段完整、零硬编码密钥与私人主机路径。
+- [x] **商业化上架策略文档**：创建 `docs/master_mission/AGENSI_LISTING_STRATEGY.md`（结合 `joeri@agensi.io` 邮件规范：非独占 IP、70/30 分成、独立无 MCP 运行 + 本地 MCP 引导架构）。
+- [x] **自动化测试扩展 (`tests/test_agensi_skills_phase7.py`)**：4/4 测试全部通过（`0.242s`）。

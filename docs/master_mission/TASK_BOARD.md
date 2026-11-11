@@ -43,3 +43,10 @@
   - 离线包 `yangdw2024-gp-0.3.0.tgz` 与 `gd-gp-0.3.0.tgz` 已构建（`64.7 MB` / `153.0 MB` / `1158` files）
   - 模拟 153 字符深度 DSH 前缀 `npm install --offline` 最长路径 `249 < 260`，且 EXE 在该深度目录启动 + RDKit `c1ccccc1` 建模 + 优雅关闭全通
 - 下一阶段：Phase 7（Agensi Agent Skills 升级、第 3 技能 `gaussian-postprocessing` 新增、内置独立无 MCP CLI 脚本与 `dist/agensi/*.zip` 构建校验）
+
+### Phase 7 更新状态（2026-11-12）
+- Phase 7（Agensi Agent Skills 产品化与独立 CLI 工具链）：**COMPLETED**
+  - 新增/升级 3 项 Skill（`gaussian-job-setup`, `gaussian-output-analysis`, `gaussian-postprocessing`），无 MCP 亦可独立运行
+  - 生成并校验 3 份 `dist/agensi/*-v0.3.0.zip`，新增 `tests/test_agensi_skills_phase7.py` (`4/4` PASS)
+  - 编写 `docs/master_mission/AGENSI_LISTING_STRATEGY.md`
+- 下一阶段：Phase 8（GitHub 开源治理、README 0.3.0 同步、`CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TROUBLESHOOTING.md`, `THIRD_PARTY_LICENSES.md`, `.github/` Templates & Workflows）

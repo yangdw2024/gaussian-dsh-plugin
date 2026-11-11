@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "gaussian": {
+      "command": "python",
+      "args": [
+        "<PATH_TO_REPO>/mcp_server.py"
+      ],
+      "env": {
+        "GAUSSIAN_WORK_DIR": "<PATH_TO_WORK_DIR>",
+        "GAUSSIAN_DATA_DIR": "<PATH_TO_DATA_DIR>",
+        "FORMCHK_EXE": "<PATH_TO_FORMCHK_EXE>",
+        "MULTIWFN_EXE": "<PATH_TO_MULTIWFN_EXE>",
+        "VMD_EXE": "<PATH_TO_VMD_EXE>",
+        "GAUSSIAN_ALLOW_REAL_EXECUTION": "false"
+      }
+    }
+  }
+}

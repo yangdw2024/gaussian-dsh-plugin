@@ -1,65 +1,48 @@
 ---
 name: gaussian-output-analysis
-description: Scientific analysis skill for parsing Gaussian 16 calculation logs (.log/.out), extracting electronic energies, thermochemistry, HOMO-LUMO band gaps, dipole moments, and diagnosing calculation errors with actionable remedies.
-version: 1.0.0
-author: yangdw
-tags:
-  - computational-chemistry
-  - gaussian
-  - log-parser
-  - error-diagnosis
-  - mcp
+description: Parse Gaussian 16 .log/.out calculations (SCF/TD-DFT energies, HOMO-LUMO gap, optimization convergence, imaginary frequencies, ZPE/Gibbs thermochemistry) and diagnose Link errors (l9999, l502, l301, l103, l913). Includes standalone stdlib Python analyzer plus optional local MCP tools.
+version: 0.3.0
+license: MIT
+homepage: https://github.com/yangdw2024/gaussian-dsh-plugin
 ---
 
 # Gaussian Output Analysis Skill
 
-This skill enables AI Agents to parse raw Gaussian 16 calculation outputs (`.log` or `.out`), verify convergence criteria, extract critical physical and chemical metrics, and diagnose termination failures.
+Inspect Gaussian 16 output files cleanly, verify genuine stationary points and thermochemical data, distinguish multi-step `--Link1--` partial failures from true completions, and turn cryptic Link errors into actionable fixes — **standalone via Python stdlib OR connected to your local MCP server**.
 
-## Capabilities
+## Execution Modes
 
-1. **Output Parsing**:
-   - Extract electronic energy in atomic units (Hartree / a.u.) across DFT, HF, MP2, and CCSD(T) methods.
-   - Verify geometry optimization convergence (`Maximum Force`, `RMS Force`, `Maximum Displacement`, `RMS Displacement`).
-   - Extract frontier molecular orbitals: HOMO energy, LUMO energy, and band gap (eV / a.u.).
-   - Extract dipole moments (Debye), vibrational frequencies, and imaginary frequencies count.
-   - Extract thermochemical corrections: Zero-Point Vibrational Energy (ZPE), thermal enthalpy (H), and Gibbs free energy (G).
-2. **Error Diagnosis**:
-   - Identify common failure modes: SCF convergence failure, optimization oscillations, memory exhaustion (`Out-of-memory`), missing basis definitions, and linear coordinate angles.
-   - Suggest concrete input remedies (e.g. `scf=xqc`, `opt=gdiis`, `%rwf` redirection, `guess=read`).
+### Mode A: Standalone (No MCP Server Required)
+Run the zero-dependency analyzer `scripts/log_analyzer.py` on any `.log` / `.out` file and consult `references/error-diagnostics-guide.md`:
 
----
+- Structured JSON report:
+  ```bash
+  python scripts/log_analyzer.py molecule_opt.log --format json
+  ```
+- Human-readable Markdown summary:
+  ```bash
+  python scripts/log_analyzer.py molecule_opt.log --format markdown
+  ```
+*(Exit code `0` on Normal termination across all route steps, `2` on abnormal termination or incomplete multi-step job.)*
 
-## MCP Server Connection
+### Mode B: Local MCP Integration (Optional)
+Connect your desktop/CLI client to your local `gaussian-dsh-plugin` MCP server using `templates/mcp-config.json`:
+1. `parse_gaussian_output` — Extracts full structured energetics, orbital gaps, frequencies, thermochemistry, and multi-step `--Link1--` health.
+2. `diagnose_gaussian_error` — Combines log traceback detection with fix strategies.
+3. `gaussian_calc_history` / `extract_structure_from_file` — Inspect prior runs and extract final optimized SMILES/XYZ geometry via OpenBabel.
 
-Ensure your agent is connected to the **Gaussian Computational Chemistry MCP Server** as described in `templates/mcp-config.json`.
+## Scientific Verification Checklist
 
----
+1. **Confirm complete termination**: Look for `Normal termination of Gaussian` matching every `--Link1--` step (one `Normal termination` in a 2-step job means step 2 crashed!).
+2. **Verify stationary point character**:
+   - **Ground-state minimum**: `0` imaginary frequencies.
+   - **Transition state (TS)**: Strictly `1` imaginary frequency, visually verified along the reaction bond vector.
+3. **Keep KS/HF gap and TD-DFT excitations distinct**: `homo_lumo_gap_ev` is a single-particle ground-state orbital difference, **not** the TD-DFT vertical optical absorption energy (`Excited State ... eV`).
+4. **Never report mock/placeholder numbers as real Gaussian outputs**: Verify `energy_source` (`gaussian16_log`) and unit conversions (`1 Hartree = 27.211386 eV = 627.509474 kcal/mol`).
 
-## Software License & Compliance Notice
+## Bundled Files
 
-> **Gaussian Software License Compliance**:
-> This skill and its companion MCP server are automation wrappers and log parsers. They **DO NOT** bundle, distribute, or license Gaussian 16 binaries (`g16.exe`, `formchk.exe`). Users must possess a valid, legal commercial/academic license from **Gaussian, Inc.** to execute calculations.
-
----
-
-## Fallback Workflow (When MCP Server is Unavailable)
-
-If the MCP Server is not connected or tools are unavailable:
-1. The Agent should refer directly to the bundled reference guides (`references/error-diagnostics-guide.md`).
-2. Perform manual pattern-matching on the user's uploaded log snippet to identify SCF convergence errors, force oscillations, or link failures.
-3. Recommend cloning `https://github.com/yangdw2024/gaussian-dsh-plugin` to enable full automated log parsing.
-
----
-
-## Agent Workflow Instructions
-
-When the user asks to analyze a Gaussian calculation:
-
-1. **Parse the Calculation Log**:
-   - Call `parse_gaussian_output(file_path="...")` or pass the raw log text via `content="..."`.
-2. **Evaluate Termination**:
-   - If `normal_termination` is `True`, summarize the energy, convergence, HOMO-LUMO gap, and thermochemical corrections into a clean markdown table.
-   - If `normal_termination` is `False`, note the reported error message.
-3. **Diagnose Failures (if not normal)**:
-   - Call `diagnose_gaussian_error(error_text="...", log_tail="...")` to look up root causes and keyword remedies.
-   - Present the recommended fix and provide a modified route card for resubmission.
+- `SKILL.md` — Output verification checklist & standalone/MCP instructions
+- `scripts/log_analyzer.py` — Zero-dependency `.log`/`.out` parser & Link-error advisor
+- `references/error-diagnostics-guide.md` — Recovery cookbook for `l9999`, `l502`, `l301`, `l103`, `l913`, and disk/memory crashes
+- `templates/mcp-config.json` — Local stdio MCP template referencing `<PATH_TO_REPO>/mcp_server.py`

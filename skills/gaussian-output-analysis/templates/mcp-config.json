@@ -3,10 +3,12 @@
     "gaussian": {
       "command": "python",
       "args": [
-        "<PATH_TO_GAUSSIAN_MCP_SERVER>/mcp_server.py"
+        "<PATH_TO_REPO>/mcp_server.py"
       ],
       "env": {
-        "GAUSSIAN_WORK_DIR": "<PATH_TO_YOUR_CALCULATION_DIRECTORY>"
+        "GAUSSIAN_WORK_DIR": "<PATH_TO_WORK_DIR>",
+        "GAUSSIAN_DATA_DIR": "<PATH_TO_DATA_DIR>",
+        "GAUSSIAN_ALLOW_REAL_EXECUTION": "false"
       }
     }
   }

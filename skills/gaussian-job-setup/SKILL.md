@@ -1,89 +1,55 @@
 ---
 name: gaussian-job-setup
-description: Computational chemistry workflow skill for generating production-grade Gaussian 16 (.gjf) input files from 2D SMILES or 3D Cartesian coordinates, querying standard functionals and basis sets, and validating molecular constraints.
-version: 1.0.0
-author: yangdw
-tags:
-  - computational-chemistry
-  - gaussian
-  - dft
-  - rdkit
-  - mcp
+description: Prepare, validate, and optimize Gaussian 16 computational chemistry input files (.gjf) for SP, Opt+Freq, TS, IRC, TD-DFT, NMR, and implicit solvent workflows. Includes standalone stdlib Python tooling plus optional local MCP integration.
+version: 0.3.0
+license: MIT
+homepage: https://github.com/yangdw2024/gaussian-dsh-plugin
 ---
 
 # Gaussian Job Setup Skill
 
-This skill guides AI Agents (such as Claude Code, Codex CLI, Cursor) to prepare, validate, and construct standard **Gaussian 16 (.gjf)** input files for molecular quantum chemical calculations.
+Build reproducible, syntactically valid, resource-safe Gaussian 16 input (`.gjf`) files from SMILES, `.xyz` geometries, or computational requirements — working **both standalone (no MCP server required)** and **optionally connected to your local `gaussian-dsh-plugin` MCP server**.
 
-## Capabilities
+## Execution Modes
 
-1. **SMILES to 3D Input**: Convert 2D chemical formulas or SMILES (e.g., `CCO`, `c1ccccc1`) into 3D conformers using RDKit ETKDGv3 and MMFF94s energy minimization, then generate `.gjf` input files.
-2. **Coordinate Validation**: Ensure correct Cartesian coordinates, charge, spin multiplicity (2S+1), and atom count limits (<= 300).
-3. **Route Line Configuration**: Build optimized `# ...` route cards including DFT functionals (`B3LYP`, `wB97XD`, `M062X`), calculation job types (`opt`, `freq`, `sp`, `td`), and memory/processor Link 0 commands (`%mem`, `%nprocshared`, `%chk`).
-4. **Basis Set Exchange (BSE)**: Search and retrieve standard basis sets (e.g., Pople `6-31G(d,p)`, Karlsruhe `def2-SVP`, Dunning `cc-pVDZ`, effective core potentials `LANL2DZ`).
+### Mode A: Standalone (No MCP Server Required)
+Use the bundled zero-dependency Python helper `scripts/gjf_helper.py` alongside `references/route-keywords-guide.md`:
 
----
+- Convert an `.xyz` coordinate file into a formatted `.gjf`:
+  ```bash
+  python scripts/gjf_helper.py xyz-to-gjf molecule.xyz -o molecule_opt.gjf --method B3LYP --basis "6-31G(d,p)" --dispersion GD3BJ --solvent water --job-type opt_freq --mem 8GB --nproc 4
+  ```
+- Validate an existing `.gjf` (checks Link0 formatting, path traversal in `%chk`, section blank lines, charge/multiplicity electron parity, and trailing EOF blank line):
+  ```bash
+  python scripts/gjf_helper.py validate molecule_opt.gjf
+  ```
+- List built-in presets (`sp`, `opt`, `freq`, `opt_freq`, `ts`, `irc_forward`, `irc_reverse`, `td`, `nmr`):
+  ```bash
+  python scripts/gjf_helper.py presets
+  ```
 
-## MCP Server Connection
+### Mode B: Local MCP Integration (Optional)
+If running inside a desktop/CLI agent (Claude Desktop, Codex CLI, Cursor) with the open-source `gaussian-dsh-plugin` backend installed locally (see `templates/mcp-config.json`):
+1. `smiles_to_3d` / `generate_gaussian_input` for RDKit ETKDGv3 3D conformer generation and safe sandboxed `.gjf` creation.
+2. `get_basis_set` / `list_basis_sets` for Basis Set Exchange (BSE) `Gen` / `GenECP` pseudopotential blocks (e.g., `SDD` / `Def2-TZVP` on transition metals).
+3. `gaussian_keywords` for curated DFT functional, dispersion, solvation, and convergence keyword lookup.
 
-This skill connects to the local **Gaussian Computational Chemistry MCP Server**.
+> **Important Security Boundary**: Input generation does **not** invoke Gaussian 16 automatically. Keep `GAUSSIAN_ALLOW_REAL_EXECUTION=false` unless explicitly running an out-of-band human-authorized calculation on your own licensed workstation.
 
-### Setup Instructions
+## Core Design Rules for Gaussian Inputs
 
-1. Ensure Python >= 3.10 is installed with required packages:
-   ```bash
-   pip install -r requirements-mcp.txt
-   ```
-2. Configure your Agent's MCP settings using the provided template in `templates/mcp-config.json`.
+1. **Always check spin & electron parity**: Closed-shell molecules require singlet (`mult=1`) and even electron count; radicals require open-shell multiplicity matching unpaired electrons (`2S+1`).
+2. **Verify Link0 structure**: Place `%mem`, `%nprocshared`, and filename-only `%chk` before `#p`; avoid shared `%chk` directory paths (`../` or `/`).
+3. **Include trailing blank line**: Gaussian terminates with an unexpected EOF if the last geometry block lacks a blank trailing line.
+4. **Match method to chemical question**:
+   - Organic ground-state geometry/thermochemistry: `B3LYP/6-31G(d,p) EmpiricalDispersion=GD3BJ opt freq` (verify zero imaginary frequencies).
+   - Transition state search: `opt=(calcfc,ts,noeigen) freq` (verify strictly **1** imaginary frequency along the reaction coordinate, then follow with `irc=(calcfc,forward)` and `reverse`).
+   - UV-Vis excitation: `td=(nstates=6..20)` using CAM-B3LYP / wB97XD for charge-transfer states.
+   - Heavy transition metals / Lanthanides: Use `Gen` or `GenECP` with ECP basis (`SDD`, `LanL2DZ`, `def2-TZVP`).
 
-#### Example Claude Code Configuration (`claude.json`):
-```json
-{
-  "mcpServers": {
-    "gaussian": {
-      "command": "python",
-      "args": ["<PATH_TO_GAUSSIAN_MCP_SERVER>/mcp_server.py"],
-      "env": {
-        "GAUSSIAN_WORK_DIR": "<PATH_TO_YOUR_CALCULATION_DIRECTORY>"
-      }
-    }
-  }
-}
-```
+## Bundled Files
 
-#### Example Codex CLI Registration:
-```bash
-codex mcp add gaussian -- python <PATH_TO_GAUSSIAN_MCP_SERVER>/mcp_server.py
-```
-
----
-
-## Software License & Compliance Notice
-
-> **Gaussian Software License Compliance**:
-> This skill and its companion MCP server are automation wrappers and file parsers. They **DO NOT** bundle, distribute, or license Gaussian 16 binaries (`g16.exe`, `formchk.exe`). Users must possess a valid, legal commercial/academic license from **Gaussian, Inc.** to execute calculations.
-
----
-
-## Fallback Workflow (When MCP Server is Unavailable)
-
-If the MCP Server is not connected or tools are unavailable:
-1. The Agent should refer directly to the bundled reference guides (`references/route-keywords-guide.md`).
-2. Guide the user through manual assembly of Cartesian coordinates, Link 0 directives, and route cards directly in the chat.
-3. Recommend cloning `https://github.com/yangdw2024/gaussian-dsh-plugin` to enable full MCP automation.
-
----
-
-## Agent Workflow Instructions
-
-When the user asks to prepare a Gaussian calculation:
-
-1. **Check System Readiness**:
-   Call `gaussian_status()` to inspect working directories, memory allocation, and CPU quotas.
-2. **Search Guidelines or Keywords (if needed)**:
-   If the functional or keywords are unfamiliar, invoke `search_gaussian_keywords(query="...")` to verify syntax and best practices.
-3. **Generate Structure**:
-   - If starting from SMILES, call `generate_gaussian_input_from_smiles(smiles="...", job_type="opt", method="B3LYP", basis="6-31G(d,p)")`.
-   - If starting from coordinates, call `generate_gaussian_input(job_name="...", atoms=[[...]], ...)`.
-4. **Review & Confirm**:
-   Present the resulting `.gjf` route line, molecular charge, multiplicity, and saved file path to the user before submitting for execution.
+- `SKILL.md` — Workflow rules and standalone + MCP usage guide
+- `scripts/gjf_helper.py` — Zero-dependency `.xyz -> .gjf` builder, safety/parity validator, and keyword preset CLI
+- `references/route-keywords-guide.md` — Functional, basis set, dispersion, solvation, and transition-state keyword cheat sheet
+- `templates/mcp-config.json` — Local stdio MCP template referencing `<PATH_TO_REPO>/mcp_server.py`
