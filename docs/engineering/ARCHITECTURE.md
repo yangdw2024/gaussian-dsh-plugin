@@ -1,95 +1,66 @@
-# Gaussian AI Computational Chemistry 架构设计文档 (V5.1)
+# Gaussian DSH Plugin & MCP Server 系统架构（V5.2）
 
-## 1. 总体分层架构
+> 本文档描述当前 `feature/mcp-server` 分支在 V5.2 收尾后的真实双入口架构、编译运行时一致性、跨进程锁与三层执行授权边界。
 
-本项目面向计算化学工作流自动化与 AI Agent 协同，由底层计算引擎向高层协议逐层解耦：
+---
+
+## 1. 分层与跨进程双入口架构
 
 ```mermaid
 flowchart TD
-    subgraph AgentLayer["Agent 客户端接入层"]
-        ClaudeCode["Claude Code (stdio MCP)"]
-        CodexCLI["Codex CLI (stdio MCP)"]
-        Cursor["Cursor IDE (stdio MCP)"]
-        DSHApp["DSH Desktop (Cordis 插件)"]
-        AgensiSkill["Agensi 科研 Skills (提示词与工作流)"]
-    end
+    Agent["AI Agent / Codex / MCP Client"] -->|"MCP JSON-RPC (stdio)"| MCP["backend/mcp_server.py (12 MCP Tools)"]
+    DSH["DeepSeek Harness Runtime"] -->|"ESM Plugin (lib/index.js)"| FastAPI["runtimes/win32-x64/gaussian-backend.exe / FastAPI"]
 
-    subgraph ProtocolLayer["协议与管理员边界层"]
-        MCPServer["backend/mcp_server.py (FastMCP stdio, 12 Tools)"]
-        DSHAdapter["src/index.js + backend/app.py (REST, 19 Tools)"]
-        AdminApprove["POST /v1/admin/jobs/approve + scripts/approve_gaussian_job.py (带外人工授权)"]
-    end
+    MCP --> Security["backend/security.py (Read/Write/Cache Isolation + approvals/ Hard Block)"]
+    MCP --> Policy["backend/execution_policy.py (3-Layer Execution Gate + Preflight/Human Grants)"]
+    FastAPI --> Policy
 
-    subgraph SecurityLayer["安全沙箱、三层授权与跨进程调度"]
-        SecurityGuard["backend/security.py (读写/缓存隔离 + approvals/ 绝对禁止)"]
-        ExecutionPolicy["backend/execution_policy.py (Layer1完整性 / Layer2宿主门禁 / Layer3人工单次授权)"]
-        Scheduler["backend/resource_scheduler.py (ChemComputeScheduler: threading.Lock + compute_lease.lock/json)"]
-        MemGuard["backend/memory_guard.py (RSS 内存守卫)"]
-    end
+    MCP --> Core["backend/gaussian_input.py / log_parser.py / basis_set.py / errors.py"]
+    FastAPI --> Core
 
-    subgraph CoreService["计算化学核心算法与任务调度库 (Pure Python)"]
-        GJF["backend/gaussian_input.py (输入生成与规则校验)"]
-        LogParser["backend/gaussian_output.py (日志提取与仿真能量隔离)"]
-        JobManager["backend/job_manager.py (原子写盘/跨进程终态/PID复用防护/Reconcile)"]
-        MockWorker["backend/mock_worker.py (带显著仿真标记的仿真子进程)"]
-        Keywords["backend/keywords.py (关键词与常见错误库)"]
-        RDKitModule["backend/smiles/rdkit_builder.py (3D构象优化)"]
-        BasisClient["backend/basis_set.py (BSE 客户端与专用缓存)"]
-    end
+    MCP --> Sched["backend/scheduler.py (OS File Lock + Lease JSON + PID Identity)"]
+    FastAPI --> Sched
+    MCP --> JM["backend/job_manager.py (--mock-worker / DEVNULL+close_fds)"]
+    FastAPI --> JM
 
-    subgraph HardwareEngines["系统底层与外部计算引擎"]
-        G16["Gaussian 16 (g16.exe)"]
-        Formchk["formchk.exe"]
-        Multiwfn["Multiwfn 3.8"]
-        VMD["VMD 1.9.3 (Headless)"]
-        OpenBabel["OpenBabel (obabel.exe)"]
-    end
-
-    ClaudeCode & CodexCLI & Cursor --> MCPServer
-    AgensiSkill -.-> ClaudeCode & CodexCLI
-    DSHApp --> DSHAdapter
-    AdminApprove --> ExecutionPolicy
-
-    MCPServer --> SecurityGuard
-    DSHAdapter --> SecurityGuard
-    MCPServer --> ExecutionPolicy
-
-    ExecutionPolicy --> CoreService
-    SecurityGuard --> CoreService
-    Scheduler --> CoreService
-    MemGuard --> CoreService
-
-    CoreService --> HardwareEngines
+    JM -->|"GAUSSIAN_ALLOW_REAL_EXECUTION=false"| Mock["backend/mock_worker.py / .exe --mock-worker"]
+    JM -->|"3-Layer Verified (Blocked in V5.2)"| G16["D:\\G16W\\g16.exe (Never launched in V5.2)"]
 ```
 
 ---
 
-## 2. V5.1 关键架构加固
+## 2. 已注册的 12 个 MCP 工具（与 V5.1 保持零扩张）
 
-1. **核心算法零冗余**：计算化学输入输出、规则校验、任务状态与资源租约均集中于 `backend/`，DSH Backend (`app.py`) 与 MCP Server (`mcp_server.py`) 作为独立 OS 进程共享同一底层实现。
-2. **跨进程内核资源锁 (`ChemComputeScheduler`)**：在原内存 `threading.Lock()` 之上叠加 OS 文件排他锁 (`compute_lease.lock`：`msvcrt.locking` / `fcntl.flock`) 与原子持久化租约 (`compute_lease.json`)，使 DSH 与多 MCP 客户端无法突破全局串行互斥与内存限制，并具备崩溃租约回收与活跃 `g16` 子进程保护能力。
-3. **三层信任域分离与防越权沙箱**：
-   - `Layer 1`（完整性）：`integrity_token` 绑定文件 SHA-256 与资源预算，固定 `grants_human_approval=False`。
-   - `Layer 3`（带外人工授权）：签名密钥存于 `<GAUSSIAN_DATA_DIR>/approvals/.human_signing_key`，`backend/security.py` 显式禁止任何 MCP 工具访问 `approvals/` 目录；授权接口仅存于 `scripts/approve_gaussian_job.py` 与受 `_require_admin` 保护的 `POST /v1/admin/jobs/approve`，且通过单次 `nonce` 拦截重放。
-   - `Layer 2`（宿主硬门禁）：必须外部配置 `GAUSSIAN_ALLOW_REAL_EXECUTION=true`。
-4. **仿真产物强制隔离 (`Mock Isolation`)**：`backend/mock_worker.py` 在仿真日志嵌入 `[MOCK_GAUSSIAN_SIMULATION]` 等标识，`gaussian_output.py` 与 `job_manager.py` 自动识别并锁定 `is_simulated=True`、`real_gaussian_result=False`、`final_energy=None`/`last_energy=None`，合成值仅存于 `simulated_energy`。
-5. **四类路径边界控制**：`Read Roots`、`Write Roots`、`Cache Roots` (`~/.gaussian-dsh/basis_cache/` 与 `GAUSSIAN_CACHE_DIR`)，外加 `approvals/` 显式禁止区；全面通过 `Path.resolve()` 规范化防御软链接与 Windows Junction 逃逸。
+| 批次 | MCP 工具名 | 职责类别 | 底层共享/核心模块 |
+| :--- | :--- | :--- | :--- |
+| Batch 1 | `gaussian_status` | 只读状态（含跨进程 `active_compute_lease`） | `config.py`, `scheduler.py` |
+| Batch 1 | `generate_gaussian_input` | 受控写目录 `.gjf` 生成 | `gaussian_input.py`, `security.py` |
+| Batch 1 | `parse_gaussian_output` | 受控读 `.log` / `.out`（识别模拟标识） | `log_parser.py`, `security.py` |
+| Batch 1 | `diagnose_gaussian_error` | SCF / 收敛 / 资源错误诊断 | `errors.py` |
+| Batch 2 | `smiles_to_gjf` | RDKit 3D 构象嵌入与 `.gjf` 生成 | `smiles_utils.py`, `gaussian_input.py` |
+| Batch 2 | `search_basis_sets` | Basis Set Exchange 元数据检索（离线回退） | `basis_set.py` |
+| Batch 2 | `get_basis_set` | 获取基组（受控读写 `~/.gaussian-dsh/basis_cache/`） | `basis_set.py`, `security.py` |
+| Batch 2 | `search_gaussian_keywords` | 路由关键字离线检索 | `keywords.py` |
+| Batch 3 | `run_gaussian_calculation` | Pre-flight Dry-Run / Mock 模拟 / 三层授权真实计算门控 | `execution_policy.py`, `job_manager.py`, `scheduler.py` |
+| Batch 3 | `get_gaussian_job_status` | 作业状态与实时进度查询 | `job_manager.py`, `process_utils.py` |
+| Batch 3 | `list_gaussian_jobs` | 作业清单与调度租约核对 | `job_manager.py`, `scheduler.py` |
+| Batch 3 | `stop_gaussian_calculation` | 跨进程作业终止（PID 复用校验 + `stopped` 终态锁定） | `job_manager.py`, `process_utils.py` |
 
 ---
 
-## 3. 全量 12 个标准 MCP 工具矩阵 (V5.1)
+## 3. V5.2 关键架构加固项
 
-| 工具名称 | 所属阶段 | 核心作用与能力 | 安全机制与资源控制 |
-|---|---|---|---|
-| `gaussian_status` | 阶段二 | 检查 G16、formchk、工作目录、只读/只写根、原子上限与跨进程租约 | 纯只读，秒级返回 |
-| `generate_gaussian_input` | 阶段二 | 构建合规 `.gjf`，校验方法/基组/电荷/多重度与 Link 0 | `<= 300` 原子；仅限 Write Roots |
-| `parse_gaussian_output` | 阶段二 | 解析 `.log/.out` 提取科学指标；严格隔离仿真占位能量 | 仅限 Read Roots；100MB 阈值；仿真标记锁定 |
-| `diagnose_gaussian_error` | 阶段二 | 诊断 SCF/优化/内存等错误并提供参数修复建议 | 默认本地快速路径 (<0.05s) |
-| `search_gaussian_keywords` | 阶段三 | 检索分类词条（任务类型、泛函、SCF、溶剂、错误处理） | 纯内存检索；上限 `<= 50` |
-| `search_basis_sets` | 阶段三 | 搜索 BSE 基组库与适用化学元素 | 专用磁盘缓存 + 离线回退 |
-| `get_basis_set` | 阶段三 | 获取标准基组定义（`gaussian94` 等），支持存盘 | 受 Cache / Write Roots 沙箱检查 |
-| `generate_gaussian_input_from_smiles` | 阶段三 | 2D SMILES -> 3D 构象优化 (ETKDGv3+MMFF94s) -> 完整 GJF | 内存守卫 + 跨进程 RDKit 租约 + `<= 300` 原子 |
-| `submit_gaussian_calculation` | V5.0/5.1 | 预检签名、受控仿真或三层人工授权真实执行提交 | 默认 `dry_run=True`；三层授权 + 跨进程原子锁 |
-| `get_gaussian_job_status` | V5.0/5.1 | 实时查询进度、步数、能量与日志尾；采纳跨进程磁盘终态 | 有界尾读 (`<= 100` 行)；仿真能量隔离 |
-| `list_gaussian_jobs` | V5.0/5.1 | 分页列出计算队列及仿真状态标记 | 分页截断 (`<= 100`)；排除 `.recover.json` |
-| `stop_gaussian_calculation` | V5.0/5.1 | PID 实例创建时间核对后树状拆除，支持跨进程状态同步与重复停止拦截 | 防 PID 复用误杀；释放跨进程租约 |
+1. **PyInstaller 打包入口与子进程管道一致性（[entrypoint.py](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/backend/entrypoint.py)、[job_manager.py](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/backend/job_manager.py)、[process_utils.py](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/backend/process_utils.py)）**：
+   - 新增 `_maybe_run_mock_worker()` 在导入 FastAPI 应用前拦截 `--mock-worker` 与 `-m backend.mock_worker`，使冻结版 `gaussian-backend.exe` 与源码模式使用一致的后台 worker 生命周期。
+   - 在 Windows stdio MCP 会话下，`job_manager.py` 与 `spawn_subprocess()` 统一传入 `stdin=subprocess.DEVNULL, close_fds=True`，彻底消除子进程继承管道句柄导致的 CRT 启动挂起故障。
+2. **FastAPI `POST /v1/jobs` 与 MCP 三层授权对齐（[execution_policy.py](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/backend/execution_policy.py)、[app.py](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/backend/app.py)）**：
+   - 提取共享函数 `evaluate_real_content_authorization()` 与 `run_preflight_check_content()`。
+   - `SubmitJobRequest` 新增 `mock_mode`、`fail_scf`、`mock_duration`、`dry_run`、`integrity_token`、`auth_token`、`human_approval_token`、`preflight_id`。非 `mock_mode`/`dry_run` 作业一律经由同一三层门控校验（文件 SHA-256 + 资源一致性 -> `GAUSSIAN_ALLOW_REAL_EXECUTION=true` -> 单次人工 `human_approval_token` + `approvals/grants/<preflight_id>.json` 回执消费），拒绝时返回 HTTP 200 `{ok: false, rejected_layer, ...}`。
+   - `verify_human_approval(..., consume=True)` 确保即使调用方显式携带 `human_approval_token`，消费后仍立即删除对应的宿主回执文件以防重放。
+3. **信任边界声明（MCP / HTTP 控制面 vs 同账户 OS Shell）**：
+   - 当 Agent 仅能调用 MCP 工具或受控 HTTP API 时，`security.py` 对 `approvals/` 目录的硬拒绝及 `/v1/admin/jobs/approve` 的本地回环 + `Bearer <managed_token>` 校验可有效隔离 `.human_signing_key` 与审批回执。
+   - 若恶意模型或脚本在同一 Windows 操作系统用户权限下被赋予任意 OS Shell 执行能力，MCP 协议沙箱本身无法阻止同账户文件读取；生产及多租户无人值守主机必须通过独立操作系统账户与 NTFS ACL 隔离操作者私钥与审批目录。
+4. **跨机器默认值与打包路径兼容（[config.py](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/backend/config.py)、[index.js](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/src/index.js)、[package.json](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/package.json)）**：
+   - `_default_work_dir()` 在未配置 `GAUSSIAN_WORK_DIR` 且历史目录不存在时自动回退至 `<data_dir>/gjf`（默认 `%USERPROFILE%\.gaussian-dsh\gjf`）。
+   - `src/index.js` 中的 `GAUSSIAN_GUIDANCE` 改为引导 Agent 查询 `gaussian_status`，移除对特定开发机硬件与路径的硬编码。
+   - 包名保留 `@gd/gp`（DSH `.generations/live` 下最深 RDKit DLL 路径约 `253` 字符 `< 260`），并在 [README.md](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/README.md) 中明示 `@yangdw2024/gp` 长路径风险（`~269` 字符需系统启用 `LongPathsEnabled`）。

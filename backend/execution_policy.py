@@ -383,6 +383,14 @@ def verify_human_approval(
                 f.write(json.dumps({"consumed_at": time.time(), "sha256": current_sha256}))
         except FileExistsError:
             return False, "Human approval token has already been consumed concurrently (replay blocked).", None
+        pid_to_clear = payload.get("preflight_id") or preflight_id
+        if pid_to_clear:
+            receipt_to_clear = _approvals_dir() / "grants" / f"{re.sub(r'[^\w.-]', '_', str(pid_to_clear))}.json"
+            if receipt_to_clear.exists():
+                try:
+                    receipt_to_clear.unlink(missing_ok=True)
+                except Exception:
+                    pass
         if grant_file and grant_file.exists():
             try:
                 grant_file.unlink(missing_ok=True)
@@ -392,30 +400,23 @@ def verify_human_approval(
     return True, f"Authorized by human operator ({payload.get('approved_by', 'unknown')}).", payload
 
 
-def evaluate_real_execution_authorization(
-    gjf_path: Path,
+def evaluate_real_content_authorization(
+    content: str,
     integrity_token: Optional[str],
     human_approval_token: Optional[str],
-    job_name: Optional[str] = None,
+    job_name: str = "gaussian_job",
     mem: Optional[str] = None,
     nproc: Optional[int] = None,
     preflight_id: Optional[str] = None,
     consume_human_token: bool = True,
 ) -> Dict[str, Any]:
-    """Evaluate all three independent authorization layers before allowing g16.exe execution.
+    """Evaluate all three independent authorization layers on raw GJF text before g16.exe execution.
 
-    Order of checks:
-      1. Layer 1 — File & parameter integrity (integrity_token vs current .gjf SHA-256)
-      2. Layer 3 — Task-specific human authorization (non-agent out-of-band token / receipt)
-      3. Layer 2 — Host-level execution permission (GAUSSIAN_ALLOW_REAL_EXECUTION)
-    Note: Layer 2 is checked cleanly so host gate blocks physical execution without falsely
-    marking human authorization missing when a test provides valid human approval on a locked host!
-    Wait: if human authorization FAILS, reject BEFORE or clearly distinguish BOTH in audit output!
+    Shared by both MCP (`submit_gaussian_calculation`) and DSH REST (`POST /v1/jobs`) so neither
+    entry point can bypass Layer 1 (file integrity), Layer 3 (human approval), or Layer 2 (host gate).
     """
-    safe_path = validate_safe_path(gjf_path, must_exist=True, mode="read")
-    content = safe_path.read_text(encoding="utf-8", errors="ignore")
     current_sha256 = calculate_content_sha256(content)
-    clean_job_name = job_name or safe_path.stem
+    clean_job_name = job_name or "gaussian_job"
     chosen_mem = mem or settings.default_mem
     chosen_nproc = int(nproc or settings.default_nproc)
 
@@ -441,11 +442,8 @@ def evaluate_real_execution_authorization(
 
     effective_preflight_id = preflight_id or (int_payload.get("preflight_id") if int_payload else None)
 
-    # Layer 3: Task-Specific Human Authorization Check (non-consuming probe first if host gate disabled,
-    # OR validate strictly — wait: reject human auth failures first so Agent self-approval NEVER reaches host gate!)
-    # Consume only if host execution is ALSO permitted, so valid human approval isn't wasted if host is locked,
-    # OR consume strictly when valid. Let's check non-consuming first; if invalid -> reject immediately;
-    # if host gate disabled -> reject at host_gate; if host gate enabled -> consume atomically!
+    # Layer 3: Task-Specific Human Authorization Check (non-consuming probe first so valid human grants
+    # are never burned when the host gate itself rejects execution)
     human_ok, human_reason, human_payload = verify_human_approval(
         human_approval_token=human_approval_token,
         current_sha256=current_sha256,
@@ -490,15 +488,41 @@ def evaluate_real_execution_authorization(
     return {"ok": True, "authorization_audit": audit}
 
 
-def run_preflight_check(
+def evaluate_real_execution_authorization(
     gjf_path: Path,
+    integrity_token: Optional[str],
+    human_approval_token: Optional[str],
     job_name: Optional[str] = None,
     mem: Optional[str] = None,
     nproc: Optional[int] = None,
+    preflight_id: Optional[str] = None,
+    consume_human_token: bool = True,
 ) -> Dict[str, Any]:
-    """Conduct preflight inspection and issue a file-integrity token (NOT human approval)."""
+    """Evaluate all three independent authorization layers before allowing g16.exe execution."""
     safe_path = validate_safe_path(gjf_path, must_exist=True, mode="read")
     content = safe_path.read_text(encoding="utf-8", errors="ignore")
+    return evaluate_real_content_authorization(
+        content=content,
+        integrity_token=integrity_token,
+        human_approval_token=human_approval_token,
+        job_name=job_name or safe_path.stem,
+        mem=mem,
+        nproc=nproc,
+        preflight_id=preflight_id,
+        consume_human_token=consume_human_token,
+    )
+
+
+def run_preflight_check_content(
+    content: str,
+    job_name: Optional[str] = None,
+    mem: Optional[str] = None,
+    nproc: Optional[int] = None,
+    file_name_label: str = "inline.gjf",
+    file_path_label: str = "<inline>",
+    file_size_bytes: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Conduct preflight inspection on raw GJF text and issue a file-integrity token (NOT human approval)."""
     file_sha256 = calculate_content_sha256(content)
 
     charge_val = None
@@ -544,7 +568,7 @@ def run_preflight_check(
 
     chosen_mem = mem or settings.default_mem
     chosen_nproc = int(nproc or settings.default_nproc)
-    clean_job_name = job_name or safe_path.stem
+    clean_job_name = job_name or Path(file_name_label).stem or "gaussian_job"
     preflight_id = uuid.uuid4().hex[:16]
 
     integrity_token = issue_integrity_token(
@@ -565,6 +589,7 @@ def run_preflight_check(
         reasons.append(f"Compute resource is currently busy (held by {current_lease.owner_id} for {current_lease.kind})")
 
     ready = len(reasons) == 0
+    size_bytes = file_size_bytes if file_size_bytes is not None else len(content.encode("utf-8"))
 
     return {
         "status": "ready" if ready else "blocked",
@@ -575,9 +600,9 @@ def run_preflight_check(
         "multiplicity": multiplicity_val,
         "atom_count": atom_count_val,
         "input_file": {
-            "name": safe_path.name,
-            "path": str(safe_path),
-            "size_bytes": safe_path.stat().st_size,
+            "name": file_name_label,
+            "path": file_path_label,
+            "size_bytes": size_bytes,
             "sha256": file_sha256,
             "syntax_valid": gjf_valid,
             "validation_error": validation_error,
@@ -616,3 +641,23 @@ def run_preflight_check(
             "or host admin UI."
         ),
     }
+
+
+def run_preflight_check(
+    gjf_path: Path,
+    job_name: Optional[str] = None,
+    mem: Optional[str] = None,
+    nproc: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Conduct preflight inspection and issue a file-integrity token (NOT human approval)."""
+    safe_path = validate_safe_path(gjf_path, must_exist=True, mode="read")
+    content = safe_path.read_text(encoding="utf-8", errors="ignore")
+    return run_preflight_check_content(
+        content=content,
+        job_name=job_name or safe_path.stem,
+        mem=mem,
+        nproc=nproc,
+        file_name_label=safe_path.name,
+        file_path_label=str(safe_path),
+        file_size_bytes=safe_path.stat().st_size,
+    )

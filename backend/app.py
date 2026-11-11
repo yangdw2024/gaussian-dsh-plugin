@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from .basis_set import basis_set_client
 from .config import settings
-from .gaussian_input import GaussianInputRequest, generate_gjf
+from .gaussian_input import GaussianInputRequest, generate_gjf, validate_gjf
 from .gaussian_output import output_to_dict, parse_gaussian_log
 from .job_manager import job_manager
 from .keywords import get_all_categories, get_category, search_keywords
@@ -143,6 +143,14 @@ class SubmitJobRequest(BaseModel):
     gjf_content: str
     mem: Optional[str] = None
     nproc: Optional[int] = None
+    mock_mode: bool = False
+    fail_scf: bool = False
+    mock_duration: float = 0.5
+    dry_run: bool = False
+    integrity_token: Optional[str] = None
+    auth_token: Optional[str] = None
+    human_approval_token: Optional[str] = None
+    preflight_id: Optional[str] = None
 
 
 class SobkoSearchRequest(BaseModel):
@@ -532,12 +540,70 @@ def api_parse_output(req: ParseOutputRequest):
 
 @app.post("/v1/jobs")
 def api_submit_job(req: SubmitJobRequest):
-    """提交 Gaussian 任务（串行，若有运行中任务则拒绝）。"""
+    """提交 Gaussian 任务（与 MCP 共用跨进程调度锁与三层执行授权校验）。"""
+    try:
+        validate_gjf(req.gjf_content, max_atoms=settings.max_atoms)
+    except ValueError as exc:
+        return {"ok": False, "error": f"GJF 校验未通过：{exc}"}
+
+    use_mock = bool(
+        req.mock_mode
+        or os.environ.get("GAUSSIAN_MOCK_MODE", "").lower() in {"1", "true", "yes"}
+    )
+    if use_mock:
+        return job_manager.submit(
+            job_name=req.job_name,
+            gjf_content=req.gjf_content,
+            mem=req.mem,
+            nproc=req.nproc,
+            mock_mode=True,
+            fail_scf=req.fail_scf,
+            mock_duration=req.mock_duration,
+        )
+
+    from .execution_policy import (
+        evaluate_real_content_authorization,
+        run_preflight_check_content,
+    )
+
+    if req.dry_run:
+        preflight = run_preflight_check_content(
+            content=req.gjf_content,
+            job_name=req.job_name,
+            mem=req.mem,
+            nproc=req.nproc,
+        )
+        return {
+            "ok": bool(preflight.get("preflight_passed")),
+            "dry_run": True,
+            "preflight": preflight,
+        }
+
+    auth_eval = evaluate_real_content_authorization(
+        content=req.gjf_content,
+        integrity_token=req.integrity_token or req.auth_token,
+        human_approval_token=req.human_approval_token,
+        job_name=req.job_name,
+        mem=req.mem,
+        nproc=req.nproc,
+        preflight_id=req.preflight_id,
+        consume_human_token=True,
+    )
+    if not auth_eval.get("ok"):
+        return {
+            "ok": False,
+            "rejected_layer": auth_eval.get("rejected_layer"),
+            "error": auth_eval.get("error"),
+            "authorization_audit": auth_eval.get("authorization_audit"),
+        }
+
     return job_manager.submit(
         job_name=req.job_name,
         gjf_content=req.gjf_content,
         mem=req.mem,
         nproc=req.nproc,
+        mock_mode=False,
+        authorization_summary=auth_eval.get("authorization_audit"),
     )
 
 

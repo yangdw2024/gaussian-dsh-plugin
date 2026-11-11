@@ -1,0 +1,129 @@
+{
+  "phase": "V5.2",
+  "mode": "dry_run_only",
+  "real_g16_launched": false,
+  "gaussian_allow_real_execution": false,
+  "environment_status": {
+    "status": "ok",
+    "server_version": "0.2.0",
+    "transport": "stdio",
+    "gaussian": {
+      "exe": "D:\\G16W\\g16.exe",
+      "exists": true
+    },
+    "formchk": {
+      "exe": "D:\\G16W\\formchk.exe",
+      "exists": true
+    },
+    "directories": {
+      "work_dir": "E:\\YDW\\ChemDatas\\gaussian-dsh-plugin\\docs\\_verify\\v5_2_audit",
+      "data_dir": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\v52_h2_data_o5vciqjk",
+      "allowed_read_roots": [
+        "E:\\YDW\\ChemDatas\\gaussian-dsh-plugin\\docs\\_verify\\v5_2_audit",
+        "C:\\Users\\Administrator\\AppData\\Local\\Temp\\v52_h2_data_o5vciqjk\\basis_cache",
+        "E:\\YDW\\ChemDatas\\gaussian-dsh-plugin\\tests\\fixtures"
+      ],
+      "allowed_write_roots": [
+        "E:\\YDW\\ChemDatas\\gaussian-dsh-plugin\\docs\\_verify\\v5_2_audit"
+      ]
+    },
+    "resource_budget": {
+      "default_mem": "12GB",
+      "default_nproc": 8,
+      "max_atoms": 300
+    },
+    "sobko_knowledge_base": {
+      "configured": true,
+      "project_dir": "E:\\YDW\\Trae_Sob\\Sobko_MCP_project-main",
+      "run_script_exists": true,
+      "mode": "bm25_only",
+      "running": false,
+      "start_error": null
+    },
+    "active_compute_lease": {
+      "held": false,
+      "kind": null,
+      "owner_id": null
+    },
+    "running_job": false
+  },
+  "binary_inspection": {
+    "g16": {
+      "path": "D:\\G16W\\g16.exe",
+      "exists": true,
+      "size_bytes": 803328,
+      "mtime": 1482354914.0,
+      "launched": false
+    },
+    "formchk": {
+      "path": "D:\\G16W\\formchk.exe",
+      "exists": true,
+      "size_bytes": 23430144
+    }
+  },
+  "generated_input": {
+    "filename": "h2_sp_preaccept.gjf",
+    "saved_path": "docs\\_verify\\v5_2_audit\\h2_sp_preaccept.gjf",
+    "route_line": "HF/STO-3G",
+    "atom_count": 2,
+    "sha256": "a72a3e86196bf70c7608fd344dd102260f60d56ea69f764d8679d31712a58e46",
+    "content": "%mem=2GB\n%nprocshared=2\n%nosave\n%chk=h2_sp_preaccept.chk\n# HF/STO-3G\n\nH2 HF/STO-3G single-point V5.2 pre-acceptance (dry-run only)\n\n0 1\n H       0.00000000     0.00000000     0.00000000\n H       0.00000000     0.00000000     0.74000000\n\n"
+  },
+  "preflight_dry_run_result": {
+    "ok": true,
+    "dry_run": true,
+    "preflight": {
+      "status": "ready",
+      "preflight_passed": true,
+      "preflight_id": "e1b3276b7e364f2e",
+      "failure_reason": null,
+      "charge": 0,
+      "multiplicity": 1,
+      "atom_count": 2,
+      "input_file": {
+        "name": "h2_sp_preaccept.gjf",
+        "path": "E:\\YDW\\ChemDatas\\gaussian-dsh-plugin\\docs\\_verify\\v5_2_audit\\h2_sp_preaccept.gjf",
+        "size_bytes": 249,
+        "sha256": "a72a3e86196bf70c7608fd344dd102260f60d56ea69f764d8679d31712a58e46",
+        "syntax_valid": true,
+        "validation_error": null
+      },
+      "resources_requested": {
+        "job_name": "h2_sp_preaccept",
+        "mem": "2GB",
+        "nproc": 2,
+        "work_dir": "E:\\YDW\\ChemDatas\\gaussian-dsh-plugin\\docs\\_verify\\v5_2_audit",
+        "free_disk_gb": 523.0
+      },
+      "scheduler_status": {
+        "active_lease_held": false,
+        "held_by": null,
+        "lease_kind": null,
+        "holder_pid": null,
+        "host_client": null
+      },
+      "authorization_model": {
+        "layer_1_file_integrity_token_issued": true,
+        "layer_2_host_real_execution_permitted": false,
+        "layer_3_human_task_authorization_granted": false,
+        "grants_human_approval": false
+      },
+      "real_execution_authorized_on_host": false,
+      "integrity_token": "7b22657870223a20313739343338363035352e3137303531322c20226772616e74735f68756d616e5f617070726f76616c223a2066616c73652c20226a6f625f6e616d65223a202268325f73705f707265616363657074222c20226b696e64223a202266696c655f696e74656772697479222c20226d656d223a2022324742222c20226e70726f63223a20322c2022707265666c696768745f6964223a202265316233323736623765333634663265222c2022736861323536223a202261373261336538363139366266373063373630386664333434646431303232363066363064353665613639663736346438363739643331373132613538653436227d.3aa77b8c5144b4823d6508fb7d85f2548cd14b1440f7df8c2bb86d7c7063ff0b",
+      "execution_token": "7b22657870223a20313739343338363035352e3137303531322c20226772616e74735f68756d616e5f617070726f76616c223a2066616c73652c20226a6f625f6e616d65223a202268325f73705f707265616363657074222c20226b696e64223a202266696c655f696e74656772697479222c20226d656d223a2022324742222c20226e70726f63223a20322c2022707265666c696768745f6964223a202265316233323736623765333634663265222c2022736861323536223a202261373261336538363139366266373063373630386664333434646431303232363066363064353665613639663736346438363739643331373132613538653436227d.3aa77b8c5144b4823d6508fb7d85f2548cd14b1440f7df8c2bb86d7c7063ff0b",
+      "auth_token": "7b22657870223a20313739343338363035352e3137303531322c20226772616e74735f68756d616e5f617070726f76616c223a2066616c73652c20226a6f625f6e616d65223a202268325f73705f707265616363657074222c20226b696e64223a202266696c655f696e74656772697479222c20226d656d223a2022324742222c20226e70726f63223a20322c2022707265666c696768745f6964223a202265316233323736623765333634663265222c2022736861323536223a202261373261336538363139366266373063373630386664333434646431303232363066363064353665613639663736346438363739643331373132613538653436227d.3aa77b8c5144b4823d6508fb7d85f2548cd14b1440f7df8c2bb86d7c7063ff0b",
+      "instructions": "Preflight integrity check complete. Note: integrity_token verifies file/parameter integrity ONLY and does NOT grant human approval. To execute: 1. For safe simulated testing: set dry_run=False and mock_mode=True. 2. For real g16.exe hardware execution: host must enable GAUSSIAN_ALLOW_REAL_EXECUTION=true AND a human operator must issue an out-of-band human_approval_token via scripts/approve_gaussian_job.py or host admin UI."
+    },
+    "message": "Preflight inspection passed. Calculation has NOT been launched. Note: integrity_token/auth_token verifies file integrity ONLY and does NOT grant human approval. For simulated testing without hardware impact: set dry_run=False and mock_mode=True. For real g16.exe execution: set dry_run=False, provide both integrity_token and an out-of-band human_approval_token (or host approval receipt), and ensure GAUSSIAN_ALLOW_REAL_EXECUTION=true."
+  },
+  "reference_benchmark": {
+    "fixture_log": "tests/fixtures/h2_sp_reference.log",
+    "method_basis": "HF/STO-3G (r_HH = 0.7414 A)",
+    "normal_termination": true,
+    "final_energy_hartree": -1.1175058821,
+    "homo_hartree": -0.5779,
+    "lumo_hartree": 0.6697,
+    "dipole_debye": 0.0,
+    "v5_3_acceptance_tolerance_hartree": 0.0001
+  }
+}

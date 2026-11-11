@@ -66,7 +66,7 @@ output parsing → Multiwfn/VMD post-processing (orbitals / ESP / RDG).
 
 ### 方式 A：从 npm 安装（推荐）
 
-在 DSH 客户端 → 插件 → 添加插件，搜索包名安装：
+在 DSH 客户端 → 插件 → 添加插件，搜索并安装正式 npm 包名（或本地/测试构建短包名 `@gd/gp`）：
 
 ```
 @yangdw2024/gp
@@ -74,7 +74,9 @@ output parsing → Multiwfn/VMD post-processing (orbitals / ESP / RDG).
 
 后端 exe 已随 npm 包携带，无需单独下载。
 
-> 包名说明：npm 上的正式包名是 `@yangdw2024/gp`。这是短包名——DSH 会根据包名生成快照目录，包名太长会触发 Windows MAX_PATH 260 限制导致后端启动失败。
+> **包名与 Windows 路径说明**：
+> - 对外 npm 命名空间计划为 `@yangdw2024/gp`；当前仓库内 `package.json`、`cordis.patch.yml`、`src/client.js` 与 `scripts/` 使用短包名 `@gd/gp`。
+> - 原因与实测边界：DSH 会将插件解压到 `<AppData>\dsh-desktop\harness\profiles\.generations\live\<safeName>+<ver>+<hash>\node_modules\<pkg>\`。在 `@gd/gp` 下 `RDKit*.dll` 最深路径约 `253` 字符（低于 Windows `MAX_PATH=260`）；若直接使用 `@yangdw2024/gp`，同层下最深 RDKit DLL 会达到约 `269` 字符，需先开启 Windows 长路径（`LongPathsEnabled=1`）、配合 `scripts/make_short_generation.ps1` 或采用方式 B（短路径解压安装）。
 
 ### 方式 B：从 GitHub Release 下载
 
@@ -84,15 +86,15 @@ output parsing → Multiwfn/VMD post-processing (orbitals / ESP / RDG).
 
 ### 安装后配置
 
-插件默认路径是作者本机的（`D:\G16W\g16.exe` 等），**你必须用环境变量覆盖成自己的路径**：
+未设置 `GAUSSIAN_WORK_DIR` 时，若本机不存在旧默认目录，工作目录会自动回退到 `%USERPROFILE%\.gaussian-dsh\gjf`；Gaussian / Multiwfn / VMD 等商业或外部可执行文件路径可用环境变量覆盖：
 
 | 环境变量 | 指向 |
 |----------|------|
 | `GAUSSIAN_EXE` | 你的 `g16.exe` |
 | `FORMCHK_EXE` | 你的 `formchk.exe` |
 | `MULTIWFN_EXE` | 你的 `Multiwfn.exe`（可选） |
-| `VMD_EXE` | 你的 `vmd.exe`（可选） |
-| `GAUSSIAN_WORK_DIR` | Gaussian 输入/输出存放目录（建议不要放 C 盘） |
+| `VMD_EXE` | 你的 `VMD` 主程序 `vmd.exe`（可选） |
+| `GAUSSIAN_WORK_DIR` | Gaussian 输入/输出存放目录（默认优先 `%USERPROFILE%\.gaussian-dsh\gjf` 或环境变量指定目录） |
 
 设完环境变量后，**完全退出 DSH（托盘退出、进程结束）再重开**。
 
@@ -116,7 +118,7 @@ output parsing → Multiwfn/VMD post-processing (orbitals / ESP / RDG).
 | `FORMCHK_EXE` | `D:\G16W\formchk.exe` | chk → fchk（**必须改**） |
 | `MULTIWFN_EXE` | `D:\Multiwfn\Multiwfn_3.8_bin_Win64\Multiwfn.exe` | Multiwfn（可选） |
 | `VMD_EXE` | `D:\VMD\vmd.exe` | VMD（可选） |
-| `GAUSSIAN_WORK_DIR` | 作者本机路径 | 输入 / 输出 / chk 工作目录 |
+| `GAUSSIAN_WORK_DIR` | `E:\YDW\ChemDatas\Gjf`（若存在）否则 `%USERPROFILE%\.gaussian-dsh\gjf` | 输入 / 输出 / chk 工作目录 |
 | `GAUSSIAN_DATA_DIR` | `%USERPROFILE%\.gaussian-dsh` | 任务记录 / 后处理产物 / 日志目录 |
 | `GAUSSIAN_DEFAULT_MEM` | `12GB` | Gaussian 内存预算 |
 | `GAUSSIAN_DEFAULT_NPROC` | `8` | 核数（串行，勿并行） |

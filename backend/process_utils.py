@@ -98,9 +98,11 @@ def spawn_subprocess(
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd) if cwd else None,
+            stdin=subprocess.DEVNULL,
             stdout=stdout_handle,
             stderr=stderr_handle,
             env=env or os.environ.copy(),
+            close_fds=True,
             creationflags=creationflags,
             shell=False,
         )

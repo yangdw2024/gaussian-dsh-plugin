@@ -1,44 +1,39 @@
-# Gaussian AI 综合测试矩阵与验证报告 (V5.1)
+# 工程测试与验收矩阵（V5.2）
 
-> 基线分支：`feature/mcp-server` ｜ 环境：Windows 10/11 (Python 3.12.10, OpenAI Codex CLI v0.148.0, Node.js)
-
-## 1. 测试层级与状态矩阵
-
-| 测试编号 | 测试层次 | 测试套件 / 脚本 | 测试内容与断言 | 退出码 | 结果 | 责任判定与说明 |
-|---|---|---|---|---|---|---|
-| **T01** | L1 单元测试 | `tests/test_security.py` | 只读/只写边界隔离、目录逃逸拦截、相对路径解析、绝对路径越界拒绝、源码目录写保护、用户目录写入拒绝、100MB 大文件限制、Null Byte 攻击防御 | 0 | **PASS** | 10 / 10 通过 |
-| **T02** | L1 单元测试 | `tests/test_mcp_batch1.py` | 首批 4 个 MCP 工具 (`gaussian_status`, `generate_gaussian_input`, `parse_gaussian_output`, `diagnose_gaussian_error`)、300 原子上限与快速错误诊断 | 0 | **PASS** | 12 / 12 通过 |
-| **T03** | L1 单元测试 | `tests/test_mcp_batch2.py` | 第二批 4 个 MCP 工具 (`search_gaussian_keywords`, `search_basis_sets`, `get_basis_set`, `generate_gaussian_input_from_smiles`)、RDKit 构象与专用 Cache Roots 检查 | 0 | **PASS** | 12 / 12 通过 |
-| **T04** | L1 行为回归 | `tests/test_dsh_shared_regression.py` | DSH 共享模块行为回归：`opt+freq` 映射、BSE 损坏缓存容灾、无网离线回退 | 0 | **PASS** | 3 / 3 通过 |
-| **T05** | L1 科研解析与基准 | `tests/test_scientific_correctness.py` | H2/H2O/TS/SCF 合成解析样例数值提取、RDKit 苯构象及本地外部 G16 日志比对 | 0 | **PASS** | 6 / 6 通过（外部 CLASS A 日志存在可移植性边界） |
-| **T06** | L2 协议集成 | `tests/test_mcp_protocol_stdio.py` | 标准 stdio 管道 JSON-RPC 2.0 握手、`tools/list` 全量 12 工具发现、`tools/call` 交互与 stdout 零污染 | 0 | **PASS** | 1 / 1 通过 |
-| **T07** | L2 任务生命周期与终止防护 | `tests/test_job_lifecycle.py` | Dry-run 预检、三层授权门禁拦截、Mock 运行与 `is_simulated` 标记、并发互斥、SCF 失败模拟、`stop_gaussian_calculation` 杀进程 / 重复终止拦截 / OS PID 复用保护 | 0 | **PASS** | 9 / 9 通过 |
-| **T08** | L3 科研闭环与能量隔离 | `tests/test_scientific_workflow.py` | SMILES (`CCO`, `c1ccccc1`) -> 3D -> GJF -> Mock 计算 -> 轮询 -> 解析与诊断，验证 `final_energy=None` / `last_energy=None` 与 `simulated_energy` 隔离 | 0 | **PASS** | 2 / 2 通过 |
-| **T09** | L2 跨进程资源调度 | `tests/test_cross_process_scheduling.py` | `dsh_backend` 与 `mcp_server` 双独立 OS 进程实测：跨进程租赁互斥、同步爆破提交仅 1 成功、跨进程取消终态一致性、崩溃租约回收与存活 `g16` 子进程保护 | 0 | **PASS** | 4 / 4 通过 |
-| **T10** | L1/L2 执行授权对抗 | `tests/test_execution_authorization.py` | 预检不含人工授权、`confirmed=True` 绕过拦截、`integrity_token` 冒用拦截、GJF/资源篡改拦截、`approvals/` 沙箱禁止访问、单次 nonce 防重放、`/v1/admin/jobs/approve` 与 `scripts/approve_gaussian_job.py` | 0 | **PASS** | 8 / 8 通过 |
-| **T11** | L3 Codex CLI 全工具实测 | `docs/_verify/v5_audit/` + `docs/_verify/v5_1_audit/` | 受控 `--approve-for-me` 沙箱下覆盖 V5.0 (8 项) + V5.1 剩余 4 工具与授权门禁 (5 项) | 0 | **PASS** | 8/8 (V5.0) + 5/5 (V5.1) 通过，全量 12 工具 100% 实机覆盖 |
-| **T12** | L1 后端离线烟雾 | `docs/_verify/backend_offline_smoke.py` | FastAPI 后端 `/health`、`/v1/status`、`/v1/postprocess/capabilities`、匿名 `/v1/admin/shutdown` 403、非法 GJF 拒绝、`/v1/jobs` | 0 | **PASS** | 6 / 6 通过 |
-| **T13** | L1 DSH 输出契约校验 | `docs/_verify/output_contract_check.mjs` | 校验 DSH 插件全量 19 个工具 `schema`/`render` 输出契约定义 | 0 | **PASS** | 19 / 19 通过 |
-| **T14** | L5 发布演练 (非发布) | `npm pack --dry-run` + `dist/agensi/*.zip` | 检查 npm tarball 清单与 Agensi Skills ZIP 内部结构 (`SKILL.md`, `references/`, `templates/mcp-config.json`) | 0 | **PASS (演练)** | `gd-gp-0.2.0.tgz` (2153 files, 72.2MB)；仅演练未发布 |
-| **T15** | L1 二进制产物测试 | `scripts/smoke_test_backend.ps1` | 验证预构建 `runtimes/` 下 `gaussian-backend.exe` | — | **STALE / NOT RE-RUN IN V5.1** | `runtimes/` 仍为旧阶段构建产物，V5.1 未重编二进制，发布新二进制前需重编并重测 |
-| **T16** | L4 外部 DSH 宿主探针 | `scripts/verify_installed_runtime.mjs` / `verify_plugin_shape.mjs` | 探测 DSH Desktop 宿主 live profile 安装挂载与包结构 | — | **BLOCKED (External Host)** | 本环境未运行于已安装插件的 DSH 宿主 profile 下，受外部宿主条件限制 |
-| **T17** | L3 真实 Gaussian 执行 | 真实 `g16.exe` 计算 | 在开启 `GAUSSIAN_ALLOW_REAL_EXECUTION=true` 下调用物理 `g16.exe` 完成真实作业 | — | **NOT RUN (Policy Locked)** | 遵守阶段约束，保持真实物理计算门禁关闭 |
-| **T18** | L5 对外发布动作 | `git push` / `npm publish` / Agensi 上传 | 推送至 GitHub、发布 npm 或上传 Agensi 市场 | — | **NOT RUN (Forbidden)** | 严格遵守授权边界，仅做本地提交与发布前演练 |
+> 本矩阵所有状态均来自 V5.2 最终代码与编译产物修改后的真实命令实测输出，无推定或跳过放行项。
 
 ---
 
-## 2. Python 自动化测试统计总表 (最终回滚复核后执行结果)
+## 1. 全链路验收矩阵
 
-| 测试套件 | 测试文件 | 测试用例数 | 结果 |
-|---|---|---|---|
-| 安全边界测试 | `tests/test_security.py` | 10 | **PASS (10/10)** |
-| MCP 工具批次 1 | `tests/test_mcp_batch1.py` | 12 | **PASS (12/12)** |
-| MCP 工具批次 2 | `tests/test_mcp_batch2.py` | 12 | **PASS (12/12)** |
-| 协议层 stdio 测试 | `tests/test_mcp_protocol_stdio.py` | 1 | **PASS (1/1)** |
-| 共享模块行为回归 | `tests/test_dsh_shared_regression.py` | 3 | **PASS (3/3)** |
-| 量子化学科研解析 | `tests/test_scientific_correctness.py` | 6 | **PASS (6/6)** |
-| 任务生命周期与终止防护 | `tests/test_job_lifecycle.py` | 9 | **PASS (9/9)** |
-| 端到端科研闭环与隔离 | `tests/test_scientific_workflow.py` | 2 | **PASS (2/2)** |
-| 跨进程并发调度与恢复 | `tests/test_cross_process_scheduling.py` | 4 | **PASS (4/4)** |
-| 执行授权三层隔离对抗 | `tests/test_execution_authorization.py` | 8 | **PASS (8/8)** |
-| **全量自动化测试总计** | **10 个测试文件** | **67** | **PASS (67/67, 100%)** |
+| 编号 | 测试层次 | 测试对象 / 脚本 | V5.2 实测结果 | 关键实测依据 |
+| :--- | :--- | :--- | :--- | :--- |
+| T01 | 安全隔离 | `tests/test_security.py` | **PASS (10/10)** | 路径逃逸、读写目录隔离、Windows Junction/Symlink 与大文件限制全部通过 |
+| T02 | MCP Tool | `tests/test_mcp_batch1.py` | **PASS (12/12)** | 状态查询、`generate_gaussian_input`、`parse_gaussian_output`、`diagnose_gaussian_error` |
+| T03 | MCP Tool | `tests/test_mcp_batch2.py` | **PASS (12/12)** | `smiles_to_gjf`、BSE 检索/离线回退、基组缓存、关键字检索 |
+| T04 | MCP 协议 | `tests/test_mcp_protocol_stdio.py` | **PASS (1/1)** | 真实 `mcp_server.py` stdio 握手、`list_tools` 与工具调用闭环 |
+| T05 | 回归基准 | `tests/test_dsh_shared_regression.py` | **PASS (3/3)** | BSE 离线容错、损坏缓存恢复与 DSH `job_type` 路线映射 |
+| T06 | 科研正确性 | `tests/test_scientific_correctness.py` | **PASS (6/6)** | `H2` / `H2O` / `TS` 虚频 / SCF 失败识别；含依赖本机参考日志的 `test_benzene_smiles_and_real_g16_benchmark` |
+| T07 | 作业生命周期 | `tests/test_job_lifecycle.py` | **PASS (9/9)** | Dry-Run / Mock 提交、模拟标识校验、停止/重复停止、PID 复用防护 |
+| T08 | 科研闭环 | `tests/test_scientific_workflow.py` | **PASS (2/2)** | 乙醇与苯分子端到端“SMILES -> 输入 -> Mock 计算/失败诊断 -> 解析”闭环 |
+| T09 | 跨进程调度 | `tests/test_cross_process_scheduling.py` | **PASS (4/4)** | 源码级 DSH 与 MCP 双客户端并发抢占（严格仅 1 个生效）、跨进程取消与租约回收 |
+| T10 | 执行授权 | `tests/test_execution_authorization.py` | **PASS (8/8)** | Dry-Run 禁颁人类令牌、三层独立拦截、资源篡改拒绝与单次消费防重放 |
+| T11 | 对抗安全 | `tests/test_v52_auth_adversarial.py` | **PASS (7/7)** | 新增 V5.2：7 类对抗向量（密钥渗漏、12 工具清单审计、Admin API 越权、HMAC 伪造、重放、审批后篡改、跨作业劫持） |
+| T12 | 编译端双端互操作 | `tests/test_v52_compiled_cross_process.py` | **PASS (5/5)** | 新增 V5.2：真实 `gaussian-backend.exe` + `mcp_server.py` 跨进程租约可见、并发竞争、`/shutdown` 保留运行子进程、并发取消与 `DATA_DIR` 分离对比 |
+| T13 | 后端离线冒烟 | `docs/_verify/backend_offline_smoke.py` | **PASS (6/6)** | `/v1/health`、`/v1/status`、`/v1/postprocess/capabilities`、`/v1/admin/shutdown` 匿名 403、非法 GJF 拒绝、`/v1/jobs` |
+| T14 | DSH 契约校验 | `docs/_verify/output_contract_check.mjs` | **PASS (19/19)** | `CONTRACT PASS`（注：因环境未安装 `@deepseek-ai/dsh-llm`，使用脚本内置内联子集校验器） |
+| T15 | 编译运行时完整性 | `runtimes/win32-x64/runtime.json` + `check_long_paths.ps1` + `smoke_test_backend.ps1` | **PASS** | `2150` 个文件 SHA-256 校验 `BAD = 0`；最长相对路径 `172` 字符（`0 > 260`）；隔离环境变量冒烟退出码 `0` |
+| T16 | 默认工作目录回退 | `_default_work_dir` Python 隔离验证 | **PASS** | 模拟遗留 `E:\YDW\ChemDatas\Gjf` 不存在时正确回退至 `<data_dir>\gjf` |
+| T17 | 打包与 Skills 资产 | `npm pack --dry-run` + `dist/agensi/*.zip` + `fake @gd/gp` | **PASS** | `@gd/gp@0.2.0` (`2244` 文件，tarball `76,686,018` B / 展开 `172,725,790` B)；两份 Agensi ZIP 完整保留；隔离 `lib/index.js` 导出正常 |
+| T18 | H2 真实预处理档案 | `H2_REAL_PREACCEPTANCE.md` + `h2_preflight_dossier.json` | **Dry-Run READY** | 完成输入 SHA-256 固化、Dry-Run 预检及参考能量对齐；**V5.2 严禁且未启动真实 `g16.exe`** |
+
+---
+
+## 2. Python 自动化测试统计总表
+
+- 运行解释器：`Python 3.12.10`（`$env:LOCALAPPDATA\Programs\Python\Python312\python.exe`）
+- 执行环境变量：`GAUSSIAN_ALLOW_REAL_EXECUTION=false`
+- 执行命令：`python -m unittest discover -s tests -v`
+- 汇总结果：**Ran 79 tests — OK（退出码 `0`，失败 `0`，错误 `0`，跳过 `0`）**
+
+> 说明：[test_benzene_smiles_and_real_g16_benchmark](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/tests/test_scientific_correctness.py) 在当前开发工作站上通过，依赖于工作站本地已有历史参考日志文件；跨机器在未放置该日志的新主机运行该单测需注意此前置条件。

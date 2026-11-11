@@ -12,7 +12,7 @@
 
 param(
     [string]$Version = "0.2.0",
-    [string]$Python = "3.13.13"
+    [string]$Python = "3.12.10"
 )
 
 $ErrorActionPreference = "Stop"

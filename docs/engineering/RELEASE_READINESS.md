@@ -1,55 +1,29 @@
-# Gaussian AI MCP Server 发布就绪度评估 (Release Readiness V5.1)
+# 发布就绪评估报告（RELEASE READINESS — V5.2）
 
-本文档对 `feature/mcp-server` 分支在 V5.1 工程收尾阶段的软件质量、安全合规、跨进程调度稳定性及对外发布阻塞项进行客观评估。
-
----
-
-## 1. 全量 12 个 MCP 工具与授权机制就绪表
-
-| 工具名称 | 类别 | 代码实现与测试状态 | V5.1 加固要点 | Codex 实机验证 |
-|---|---|---|---|---|
-| `gaussian_status` | 环境就绪 | PASS | 披露 `compute_lease` 跨进程占用者与隔离根目录 | 已验证 (`v5_audit`) |
-| `generate_gaussian_input` | 输入构建 | PASS | `<= 300` 原子校验、仅限 Write Roots | 已验证 (`v5_audit`) |
-| `parse_gaussian_output` | 结果解析 | PASS | 自动识别仿真标并将仿真能量隔离至 `simulated_energy`，`final_energy=None` | 已验证 (`v5_audit`) |
-| `diagnose_gaussian_error` | 错误诊断 | PASS | 默认本地瞬时规则路径，避免外部慢探测超时 | 已验证 (`v5_audit`) |
-| `search_gaussian_keywords` | 知识检索 | PASS | 纯内存关键词检索与数量截断 | 已验证 (`v5_1_audit`) |
-| `search_basis_sets` | 基组检索 | PASS | 本地缓存 + 无网离线回退 | 已验证 (`v5_1_audit`) |
-| `get_basis_set` | 基组获取 | PASS | 受专用 Cache Roots (`~/.gaussian-dsh/basis_cache/`) / Write Roots 隔离 | 已验证 (`v5_1_audit`) |
-| `generate_gaussian_input_from_smiles` | 3D 构象 | PASS | 内存守卫 + 跨进程 `rdkit` 锁 + 显式全氢 | 已验证 (`v5_audit`) |
-| `submit_gaussian_calculation` | 任务调度 | PASS | 三层授权 (`integrity_token` + 带外 `human_approval_token` + `GAUSSIAN_ALLOW_REAL_EXECUTION`) + 跨进程锁 + `is_simulated` | 已验证 (`v5_audit` + `v5_1_audit` 防绕过) |
-| `get_gaussian_job_status` | 进度监控 | PASS | 采纳跨进程磁盘终态、Mock 能量置入 `simulated_energy` (`last_energy=None`) | 已验证 (`v5_audit`) |
-| `list_gaussian_jobs` | 队列管理 | PASS | 统一透传仿真标识并严格隔离 `last_energy` | 已验证 (`v5_audit`) |
-| `stop_gaussian_calculation` | 进程终止 | PASS | OS 创建时间防 PID 复用误杀、`taskkill /F /T` 树状清理、重复停止拦截与跨进程终态同步 | 已验证 (`v5_1_audit`) |
+> 评估范围：`feature/mcp-server` 分支在 V5.2 工程加固后的发布就绪状态。  
+> 结论：**桌面开发者源码/预编译本地交付就绪（受控 Dry-Run & Mock 模式）；对 npm 公共发布与真实 `g16.exe` 执行仍按规则保持发布门控锁定。**
 
 ---
 
-## 2. 发布演练结果 (Dry-Run Only — 未对外发布)
+## 1. 发布就绪检查总览
 
-1. **Agensi Standalone Skills ZIP (`dist/agensi/`)**：
-   - `dist/agensi/gaussian-job-setup.zip`：包含根目录 `SKILL.md` (YAML frontmatter 完整)、`references/route-keywords-guide.md`、`templates/mcp-config.json`（含通用占位符配置及不随包分发 G16 二进制的合规声明）。
-   - `dist/agensi/gaussian-output-analysis.zip`：包含根目录 `SKILL.md`、`references/error-diagnostics-guide.md`、`templates/mcp-config.json`。
-   - 原型源文件位于仓库 `skills/` 目录并纳入 Git 版本管理；`dist/` 按构建产物规则保持在 `.gitignore` 外（仅作本地待上传分发包，上传需等产品文案及人工复核授权）。
-2. **npm Dry-Run (`npm pack --dry-run`)**：
-   - 成功生成测试归档摘要：`gd-gp-0.2.0.tgz`（包体积 `72.2 MB`，解包体积 `162.8 MB`，共 `2153` 个文件）。
-3. **Python 依赖锁定 (`requirements-mcp.txt`)**：
-   - 已核查全量第三方直接导入模块（含 `mcp`, `rdkit`, `numpy`, `requests`, `pydantic`, `pydantic-core`, `psutil`, `fastapi`, `uvicorn`, `httpx`, `pillow`），均精确锁定版本号。
+| 维度 | 当前状态 | 说明与证据 |
+| :--- | :--- | :--- |
+| Windows 编译运行时 (`runtimes/win32-x64`) | **READY** | Python `3.12.10` + PyInstaller `6.22.3` 重建完成；`2150` 项 `runtime.json` SHA-256 `BAD=0`；支持 `--mock-worker` 与 `stdin=DEVNULL` 管道修复；隔离冒烟 `PASS` |
+| DSH 后端与 MCP 跨进程一致性 | **READY** | 实测已编译 `gaussian-backend.exe` + `mcp_server.py` 共享锁、并发抢占、优雅停机保租约与停止竞争 `5/5 OK`；`POST /v1/jobs` 与 MCP 共用三层授权门控 |
+| 三层执行授权与对抗加固 | **READY（MCP/HTTP 边界）** | `7/7` 对抗测试拦截了密钥读取、Admin API 越权、HMAC 伪造、令牌重放、审批后参数篡改及跨作业劫持；**同账户 OS Shell 威胁须靠独立系统账户/NTFS ACL 防护** |
+| 默认配置可移植性 | **READY** | `backend/config.py` 实现 `_default_work_dir()` 回退至 `<data_dir>/gjf`；`src/index.js` `GAUSSIAN_GUIDANCE` 已泛化，无开发机硬件与私人路径硬编码 |
+| DSH / npm 包体积与 Windows `MAX_PATH` | **CONDITIONAL** | `@gd/gp@0.2.0` (`npm pack --dry-run`: `2244` 文件，`~73.13 MiB` 压缩包) 在 DSH `.generations/live` 下最深 RDKit DLL 约 `253` 字符（安全 `< 260`）；若强行重命名为 `@yangdw2024/gp` 则会涨至 `~269` 字符（触发 Win10/11 `MAX_PATH` 风险，除非宿主开启 `LongPathsEnabled` 或重构路径布局） |
+| Agensi Skills ZIP 资产 | **READY（待人工审核上架）** | `dist/agensi/gaussian-job-setup.zip` (`3,292` B) 与 `dist/agensi/gaussian-output-analysis.zip` (`3,020` B) 已确认在重建后完整保留 |
+| 真实 Gaussian (`g16.exe`) 计算通道 | **HOLD（待 V5.3 批准）** | 已备齐 `H2 HF/STO-3G` 预检档案（[H2_REAL_PREACCEPTANCE.md](file:///E:/YDW/ChemDatas/gaussian-dsh-plugin/docs/engineering/H2_REAL_PREACCEPTANCE.md)），V5.2 阶段保持 `GAUSSIAN_ALLOW_REAL_EXECUTION=false` 未拉起真实算例 |
 
 ---
 
-## 3. 已验证达成项 vs 未解决高风险阻塞项 (Release Blockers)
+## 2. V5.1 至 V5.2 发布阻塞项核销情况
 
-### 已达成项
-- [x] **跨进程锁闭环**：DSH Backend 与 MCP Server 间通过 `compute_lease.lock` + `compute_lease.json` + 原子写盘彻底消除并发越界竞态。
-- [x] **人工带外授权隔离**：`confirmed=True` 与 `integrity_token` 无法替代人工授权；`.human_signing_key` 位于 `security.py` 显式屏蔽的 `approvals/` 目录内；单次 `nonce` 拦截重放攻击。
-- [x] **仿真产物零混用**：`mock_worker` 输出不再可能伪装成真实 `final_energy` / `last_energy`。
-- [x] **全量 67 项单元测试 + 烟雾 + DSH 19 工具契约 + Codex 12 工具全实测 PASS**。
-
-### 发布与上线前阻塞项 (Release Blockers — 必须先解决或显式决策)
-1. **[BLOCKER-1] 预构建二进制运行时尚未随 V5.1 源码重编**：
-   `npm pack --dry-run` 打包的 `runtimes/win32-x64/gaussian-backend/` 为此前版本构建，**尚未重新执行 PyInstaller 打包与 `scripts/smoke_test_backend.ps1` 验证**。发布新版本 DSH npm 包前，必须重新构建运行时二进制并复测通过。
-2. **[BLOCKER-2] npm 包名与工作区配置可移植性差异**：
-   当前 `package.json` 中的包名为 `@gd/gp@0.2.0`，与背景说明中的 `@yangdw2024/gp` 存在命名差异；同时 `backend/config.py` 默认回退路径与 `tests/test_scientific_correctness.py` 外部参考日志路径仍指向本机特定工作盘，新用户安装需通过环境变量覆盖或进一步泛化默认值。
-3. **[BLOCKER-3] 真实物理计算 (`g16.exe`) 与 DSH Desktop 宿主联调尚未放开实跑**：
-   遵循本阶段安全边界，`GAUSSIAN_ALLOW_REAL_EXECUTION` 仍保持禁用，真实工作站算例端到端压测与 DSH Desktop live profile 挂载测试 (`verify_installed_runtime.mjs` / `verify_plugin_shape.mjs`) 待生产发布前单独批准执行。
-4. **[BLOCKER-4] 对外分发动作尚未授权**：
-   尚未执行 `git push`、`npm publish` 或向 Agensi 提交正式商品包；当前仅完成了 `feature/mcp-server` 分支上的本地安全固化与源码级提交。
+| 阻塞项编号 | 原先阻塞描述 | V5.2 处置状态 | 结论与后续条件 |
+| :--- | :--- | :--- | :--- |
+| **BLOCKER-1** | `runtimes/win32-x64/gaussian-backend.exe` 为旧版本，缺少跨进程调度与三层授权同步 | **已关闭（CLOSED）** | 已在 Python `3.12.10` 下全量重建；`2150` 文件 SHA-256 校验通过；编译端与 MCP `5/5` 跨进程测试通过 |
+| **BLOCKER-2** | 跨机器默认路径与包名作用域 `@gd/gp` vs `@yangdw2024/gp` 及 `MAX_PATH` 风险未澄清 | **工程部分关闭 / 发布策略锁定** | 默认工作目录回退与提示词泛化已完成验证；保留 `@gd/gp` 规避 `269` 字符溢出，公开 npm `@yangdw2024/gp` 需待路径瘦身或要求目标环境启用 `LongPathsEnabled` |
+| **BLOCKER-3** | 真实 Gaussian（最小 H2 单点）端到端实测尚未执行 | **保留待批（GATED -> V5.3）** | 已完成只读文件盘点、SHA-256 固化、Dry-Run 预检与参考能量基准对齐（`H2_REAL_PREACCEPTANCE.md`），等待 V5.3 单独授权运行 |
+| **BLOCKER-4** | `git push` / `npm publish` / Agensi 市场发布操作 | **保留待批（GATED）** | 严格遵循指令禁止越权推送或发布，仅完成本地 Git 提交与发布前自检 |

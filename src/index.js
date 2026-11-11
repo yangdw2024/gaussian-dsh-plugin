@@ -522,19 +522,19 @@ function defineTool(options) {
 
 const GAUSSIAN_GUIDANCE = `## Gaussian 计算助手（gaussian-dsh 插件）
 
-本插件辅助 Gaussian 16 计算，后端运行在本机 http://127.0.0.1:8765。
+本插件辅助 Gaussian 16 计算，后端默认运行在本机 http://127.0.0.1:8765（具体端口与路径可通过环境变量覆盖）。
 
 ### 工作流
-1. **生成输入**：用 generate_gaussian_input 生成 .gjf（自动写入工作目录 E:\\YDW\\ChemDatas\\Gjf）。
-2. **提交任务**：用 submit_gaussian_job 提交（自动串行，禁止并行）。
-3. **监控状态**：用 get_gaussian_job 查看进度（当前优化步、最新能量、log 尾部）。
-4. **解析结果**：任务完成后用 parse_gaussian_output 提取能量、HOMO-LUMO、偶极矩、收敛状态等。
+1. **环境检查**：首次操作先调用 \`gaussian_status\`，获取当前机器实际的 \`work_dir\`、\`data_dir\`、\`gaussian_exe\`、\`default_mem\` 与 \`default_nproc\`。
+2. **生成输入**：用 \`generate_gaussian_input\` 或 \`generate_gaussian_input_from_smiles\` 生成 \`.gjf\`（自动写入受控 \`work_dir\`）。
+3. **提交任务**：用 \`submit_gaussian_job\` 提交（与调度器共享跨进程串行锁，禁止并行重计算）。
+4. **监控状态**：用 \`get_gaussian_job\` 查看进度（当前优化步、最新能量、log 尾部）。
+5. **解析结果**：任务完成后用 \`parse_gaussian_output\` 提取能量、HOMO-LUMO、偶极矩、收敛状态等。
 
-### 硬件约束（用户机器）
-- CPU: AMD Ryzen 7 9700X（8核16线程），默认 nprocshared=8
-- 内存: 15.1 GB，默认 mem=12GB
-- Gaussian 16 Rev A.03，路径 D:\\G16W\\g16.exe
-- 严禁并行多任务，必须串行
+### 硬件与执行约束
+- 默认内存与核数以 \`gaussian_status\` 返回为准（环境变量 \`GAUSSIAN_DEFAULT_MEM\` / \`GAUSSIAN_DEFAULT_NPROC\` 可调）。
+- Gaussian 可执行文件与工作目录可通过 \`GAUSSIAN_EXE\`、\`FORMCHK_EXE\`、\`GAUSSIAN_WORK_DIR\` 覆盖。
+- 严禁并行多任务，重计算（Gaussian / Multiwfn / VMD / RDKit）全局串行。
 
 ### 重要提醒
 - 大体系（>100原子）不要用 opt=calcfc，会内存爆炸

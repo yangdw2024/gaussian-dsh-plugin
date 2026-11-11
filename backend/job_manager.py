@@ -586,15 +586,25 @@ class JobManager:
 
             if use_mock:
                 import sys
-                cmd = [
-                    sys.executable,
-                    "-m",
-                    "backend.mock_worker",
-                    str(gjf_path),
-                    str(log_path),
-                    "--duration",
-                    str(mock_duration),
-                ]
+                if getattr(sys, "frozen", False):
+                    cmd = [
+                        sys.executable,
+                        "--mock-worker",
+                        str(gjf_path),
+                        str(log_path),
+                        "--duration",
+                        str(mock_duration),
+                    ]
+                else:
+                    cmd = [
+                        sys.executable,
+                        "-m",
+                        "backend.mock_worker",
+                        str(gjf_path),
+                        str(log_path),
+                        "--duration",
+                        str(mock_duration),
+                    ]
                 if fail_scf:
                     cmd.append("--fail-scf")
             else:
@@ -620,8 +630,10 @@ class JobManager:
                 cmd,
                 cwd=str(work_dir),
                 env=sub_env,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                close_fds=True,
                 creationflags=creationflags,
             )
             proc_started = True

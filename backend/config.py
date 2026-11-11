@@ -20,15 +20,32 @@ def _env_path(name: str, default: Optional[str]) -> Optional[Path]:
     return Path(val)
 
 
+def _default_data_dir() -> Path:
+    val = os.environ.get("GAUSSIAN_DATA_DIR")
+    return Path(val) if val else (Path.home() / ".gaussian-dsh")
+
+
+def _default_work_dir(data_dir: Path) -> Path:
+    val = os.environ.get("GAUSSIAN_WORK_DIR")
+    if val:
+        return Path(val)
+    legacy = Path(r"E:\YDW\ChemDatas\Gjf")
+    if legacy.exists():
+        return legacy
+    return data_dir / "gjf"
+
+
 class Settings:
     """运行时配置，可用环境变量覆盖。"""
 
+    # 数据目录（任务数据库、日志）
+    data_dir: Path = _default_data_dir()
     # Gaussian 可执行文件（Windows g16.exe）
     gaussian_exe: str = os.environ.get("GAUSSIAN_EXE", r"D:\G16W\g16.exe")
     # formchk 可执行文件（Gaussian 工具，chk → fchk）
     formchk_exe: Optional[Path] = _env_path("FORMCHK_EXE", r"D:\G16W\formchk.exe")
-    # 默认工作目录（输入/输出/chk 存放）
-    work_dir: Path = Path(os.environ.get("GAUSSIAN_WORK_DIR", r"E:\YDW\ChemDatas\Gjf"))
+    # 默认工作目录（输入/输出/chk 存放；无 E:\ 时自动回退到 ~/.gaussian-dsh/gjf）
+    work_dir: Path = _default_work_dir(data_dir)
     # 默认内存与核数（匹配用户硬件：15GB 物理内存、8核16线程）
     default_mem: str = os.environ.get("GAUSSIAN_DEFAULT_MEM", "12GB")
     default_nproc: int = int(os.environ.get("GAUSSIAN_DEFAULT_NPROC", "8"))

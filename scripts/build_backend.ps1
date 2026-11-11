@@ -17,14 +17,19 @@
 #   - Gaussian / Multiwfn / VMD are external, not bundled
 
 param(
-    [string]$PythonPath = "D:\YDW\Trae_Gromacs\miniconda3\python.exe",
-    [string]$SitePackages = "D:\YDW\Trae_Gromacs\miniconda3\Lib\site-packages",
+    [string]$PythonPath = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+    [string]$SitePackages = "",
     [switch]$OneFile
 )
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot
+
+if ([string]::IsNullOrWhiteSpace($SitePackages)) {
+    $pythonDir = Split-Path -Parent $PythonPath
+    $SitePackages = Join-Path $pythonDir "Lib\site-packages"
+}
 
 Write-Host "=== Gaussian Backend Build (onedir) ===" -ForegroundColor Cyan
 Write-Host "Project root: $projectRoot"
@@ -40,9 +45,9 @@ $renamed = Join-Path $SitePackages "pathlib-1.0.1.dist-info.__tmp_rename"
 $renamedBack = $false
 $buildOk = $false
 
-Write-Host "Cleaning old build..."
+Write-Host "Cleaning old build (preserving dist/agensi and sibling artifacts)..."
 Remove-Item -Path "build" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "dist" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "dist\gaussian-backend" -Recurse -Force -ErrorAction SilentlyContinue
 
 $spec = "packaging\gaussian-backend.spec"
 
