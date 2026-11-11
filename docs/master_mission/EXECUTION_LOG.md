@@ -10,3 +10,11 @@
 | `Phase 3` | 完成 10 项计算化学科学正确性审计、Bug 修复与专项测试 | `PASS` | 修复 `Alpha occ./virt.` 跨行匹配 `Excited` 崩溃及多步 `Link1` 部分终止漏判；新增 `tests/test_scientific_phase3.py` (10 项)；`py312 -m unittest` **99/99 OK (24.597s, `EXIT=0`)**；本地检查点提交 `62b33a5`；输出 `SCIENTIFIC_VALIDATION.md` |
 | `Phase 4` | 完成全链路安全与稳定性深度审计、6 项漏洞加固与对抗回归测试 | `PASS` | 审计覆盖全链 16 大安全维度；加固 `security.py`、`gaussian_input.py`、`process_utils.py`、`artifact_gc.py`、`app.py`、`rdkit_builder.py`；新增 `tests/test_security_phase4.py` (7 项，含真实 `mklink /J` NTFS Junction 测试)；`py312 -m unittest` **106/106 OK (34.167s, `EXIT=0`)**；输出 `SECURITY_AUDIT.md` |
 | `Phase 5 (当前)` | 启动跨 Agent 兼容性测试（DSH 只读校验 + Codex CLI 隔离实机调用） | `IN_PROGRESS` | 严禁污染用户 `~/.codex/config.toml` 或 `%APPDATA%\dsh-desktop` |
+
+## Phase 5 增量完成记录（2026-11-12）
+- [x] **DSH 构建与宿主只读检查**：`node scripts/build.mjs` 重建 `lib/index.js`、`lib/client.js`，本地 Cordis 注册校验通过（`dsh_tool_count=19`, `prompts=1`, `all_have_schema_and_output=true`）；只读核查 `%APPDATA%\dsh-desktop` 仅发现 `.bak-gd-gp-20261024` 备份（`verify_*.mjs` 返回 `EXIT=1` 因未安装 `@gd/gp`）。
+- [x] **MCP 跨目录直启修复 (`backend/mcp_server.py`)**：补充 `__package__ = "backend"` 与 `sys.path` 引导；从 `C:\Users\Administrator` 直启验证 `RC: 0`, `TOOL_COUNT: 19`。
+- [x] **独立脱敏配置模板 (`examples/mcp_configs/`)**：新增 `claude_desktop_config.json`、`codex_config.toml`、`cursor_mcp.json`、`README.md`。
+- [x] **OpenAI Codex CLI v0.148.0 隔离实机调用 (`task-2133`)**：使用临时 `CODEX_HOME`（不触碰 `~/.codex/config.toml`）通过 `gpt-5.6-sol`（`sandbox: read-only`, `--approve-for-me`）完成 4 项真实 MCP 调用（`gaussian_status`, `extract_structure_from_file`, `parse_gaussian_output`, `postprocess_capabilities`），`EXIT=0`。
+- [x] **兼容性矩阵文档**：创建 `docs/master_mission/COMPATIBILITY_MATRIX.md`；`claude`/`cursor` 如实标注 `NOT_RUN`。
+- [x] **全量 Python 回归**：修改 `backend/mcp_server.py` 后执行 `py312 -m unittest discover -s tests -v` -> `Ran 106 tests in 29.124s` (`OK`, `EXIT=0`)。

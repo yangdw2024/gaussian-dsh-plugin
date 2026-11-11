@@ -16,6 +16,12 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
+if not __package__:
+    _repo_root = str(Path(__file__).resolve().parent.parent)
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+    __package__ = "backend"
+
 # Configure logging strictly to sys.stderr so stdout remains 100% clean for JSON-RPC
 logging.basicConfig(
     stream=sys.stderr,

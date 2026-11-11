@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "gaussian": {
+      "command": "python",
+      "args": [
+        "<PATH_TO_REPO>/mcp_server.py"
+      ],
+      "env": {
+        "GAUSSIAN_ALLOW_REAL_EXECUTION": "false",
+        "GAUSSIAN_WORK_DIR": "<PATH_TO_RESEARCH_WORK_DIR>",
+        "GAUSSIAN_ALLOWED_WRITE_ROOTS": "<PATH_TO_RESEARCH_WORK_DIR>",
+        "GAUSSIAN_ALLOWED_READ_ROOTS": "<PATH_TO_RESEARCH_READ_ROOTS>",
+        "GAUSSIAN_MCP_ENABLE_SOBKO": "auto"
+      }
+    }
+  }
+}

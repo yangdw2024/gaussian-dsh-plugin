@@ -14,3 +14,13 @@
 | `phase6-pack-and-maxpath` | Phase 6 | `npm pack` + 隔离安装 + `<260` 路径校验 | `TODO` | - | - | `LongPathsEnabled=0` 下通过 |
 | `phase7-agensi-skills-zip` | Phase 7 | Agensi Skills 结构与降级规范校验 | `TODO` | - | - | 产出于 `dist/agensi/` |
 | `phase11-full-regression` | Phase 11 | 发布前最终全量回归测试 | `TODO` | - | - | 在全部改动后统一执行 |
+
+### Phase 5 实测基线追加（2026-11-12）
+| 检查项 | 命令 / 方式 | 实测结果 | 备注 |
+| :--- | :--- | :--- | :--- |
+| Full Python Suite (post `backend/mcp_server.py` edit) | `py312 -m unittest discover -s tests -v` | **PASS (`106/106` OK, 29.124s)** | 含 compiled EXE cross-process |
+| DSH Local Build & Registration | `node scripts/build.mjs` + Cordis check | **PASS (`19` tools, `1` prompt)** | `all_have_schema_and_output=true` |
+| DSH Host Profile Check (Read-only) | `verify_plugin_shape/profile_bundle/installed_runtime.mjs` | **EXIT=1 (Expected)** | 目标目录不存在，仅 `.bak-gd-gp-20261024` |
+| Out-of-Repo Direct MCP Launch | `Popen python backend/mcp_server.py` from `C:\Users\Administrator` | **PASS (`RC=0`, `TOOL_COUNT=19`)** | 修复 `ImportError` 后实测 |
+| Codex CLI Isolated Live MCP | `OpenAI Codex v0.148.0` (`gpt-5.6-sol`, isolated `CODEX_HOME`) | **PASS (`EXIT=0`, 4 tools)** | `gaussian_status`, `extract_structure_from_file`, `parse_gaussian_output`, `postprocess_capabilities` |
+| Claude Desktop / Cursor IDE | — | **NOT_RUN** | 已提供配置模板 `examples/mcp_configs/` |

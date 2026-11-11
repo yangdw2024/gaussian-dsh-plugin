@@ -28,3 +28,11 @@
 | `T7-02` | Phase 7 | 验证独立降级运行规范并撰写 Agensi 上架/定价方案草案 | `TODO` | `GATE-RELEASE-PUB` 前就绪 |
 | `T8-01` | Phase 8 | 完善双语文档、Issue 模板、安全政策与 GitHub CI/CD 工作流 | `TODO` | 不触发远端强制推送 |
 | `T9-11` | Phase 9–11 | 组装 `dist/release-candidate/`、执行全量回归扫描并生成 `FINAL_REPORT.md` | `TODO` | 本地提交 `feature/mcp-server` 并标记 `READY_FOR_APPROVAL` |
+
+### Phase 5 更新状态（2026-11-12）
+- Phase 5（DSH 验证与 Codex/MCP 跨客户端兼容）：**COMPLETED**
+  - DSH 插件 构建+契约验证通过（`19` tools / `1` prompt）；live profile 未安装（只读核查，未修改 `%APPDATA%\dsh-desktop`）
+  - Codex CLI `v0.148.0` 隔离 `CODEX_HOME` 实机 `4` 个 MCP 工具调用 `EXIT=0`
+  - `backend/mcp_server.py` 跨工作目录直接启动修复并回归验证（`106/106` tests `OK`）
+  - `examples/mcp_configs/*` 与 `docs/master_mission/COMPATIBILITY_MATRIX.md` 已就绪（`claude` / `cursor` 标为 `NOT_RUN`）
+- 下一阶段：Phase 6（Windows `MAX_PATH=260` 彻底根治、版本升级至 `0.3.0`、后端与前端重新打包、隔离 `npm pack`/`install` 校验）
