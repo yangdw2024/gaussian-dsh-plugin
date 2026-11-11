@@ -27,8 +27,8 @@ Use the bundled stdlib script `scripts/multiwfn_recipe.py` together with `refere
 ### Mode B: Local MCP Integration (Optional)
 With `gaussian-dsh-plugin` MCP running locally (see `templates/mcp-config.json`):
 1. `postprocess_capabilities` — Inspect whether `formchk`, `Multiwfn` (`3.8`), and `VMD` binaries are detected and ready.
-2. `run_postprocess` — End-to-end automated execution (converts `.chk -> .fchk`, enforces cube `<= 16,000,000` point cap before launching VMD, renders `.png` via Tachyon, and cleans up intermediate `.tga` files).
-3. `get_postprocess_task` / `parse_fchk_file` — Inspect task artifacts or read FCHK energies, dipole moments, Mulliken charges, and orbital eigenvalues directly.
+2. `create_postprocess_task` — End-to-end automated execution (converts `.chk -> .fchk`, enforces cube `<= 16,000,000` point cap before launching VMD, renders `.png` via Tachyon, and cleans up intermediate `.tga` files).
+3. `get_postprocess_task` / `list_postprocess_tasks` — Inspect queued/completed Multiwfn/VMD visualization tasks and rendered artifacts.
 
 ## Key Visualization & Safety Rules
 

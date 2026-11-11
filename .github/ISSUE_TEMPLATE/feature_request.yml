@@ -1,0 +1,17 @@
+name: Feature Request
+description: Propose a computational chemistry workflow, parser enhancement, or MCP integration improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the feature, target chemistry workflow, or client compatibility improvement.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Example Gaussian routes, sample logs, or safety constraints to consider.

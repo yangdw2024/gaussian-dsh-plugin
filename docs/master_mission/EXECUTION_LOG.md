@@ -35,3 +35,9 @@
 - [x] **自动化打包与 ZIP 根结构/脱敏校验 (`scripts/package_agensi_skills.py`)**：生成 `dist/agensi/{gaussian-job-setup,gaussian-output-analysis,gaussian-postprocessing}-v0.3.0.zip`（同步复制至 `dist/release-candidate/agensi/`），校验 `SKILL.md` 位于 ZIP 根目录、frontmatter 字段完整、零硬编码密钥与私人主机路径。
 - [x] **商业化上架策略文档**：创建 `docs/master_mission/AGENSI_LISTING_STRATEGY.md`（结合 `joeri@agensi.io` 邮件规范：非独占 IP、70/30 分成、独立无 MCP 运行 + 本地 MCP 引导架构）。
 - [x] **自动化测试扩展 (`tests/test_agensi_skills_phase7.py`)**：4/4 测试全部通过（`0.242s`）。
+
+## Phase 8 完成记录（2026-11-12）
+- [x] **`README.md` 同步 `v0.3.0`**：对齐 17 个核心 MCP 工具名（精确核验自 `backend/mcp_server.py`）+ 2 个可选 Sobko 工具、Windows `MAX_PATH < 260` 彻底修复、`@yangdw2024/gp`、3 个独立 Agensi Skills 与三层安全门禁。
+- [x] **开源治理文档**：创建 `CHANGELOG.md`、`CONTRIBUTING.md`、`SECURITY.md`、`TROUBLESHOOTING.md`、`THIRD_PARTY_LICENSES.md`（逐项核验 `importlib.metadata` 与 OpenBabel `3.2.1` GPL-2.0-only 许可）。
+- [x] **GitHub Issue 模板与 CI/CD 工作流**：创建 `.github/ISSUE_TEMPLATE/{bug_report.yml,feature_request.yml}` 及 `.github/workflows/{ci.yml,release-candidate.yml}`（仅人工 `workflow_dispatch` 组装产物，绝不自动对外发布）。
+- [x] **技能文本同步修正**：同步 `skills/*/SKILL.md` Mode B 中的精确 MCP 工具名并重跑 `scripts/package_agensi_skills.py` 验证通过（`7573B` / `6653B` / `5610B`）。

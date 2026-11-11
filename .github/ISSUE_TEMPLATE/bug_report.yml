@@ -1,0 +1,35 @@
+name: Bug Report
+description: Report a bug in DSH plugin, MCP server, scientific parser, or Windows packaging
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thank you for reporting a bug in `gaussian-dsh-plugin`. Never attach sensitive credentials or `.human_signing_key` files.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - DSH Plugin (Node / Cordis)
+        - Python MCP Server (`mcp_server.py`)
+        - FastAPI Backend / Compiled Windows EXE
+        - Gaussian Input / Output Parser
+        - Multiwfn / VMD Postprocessing
+        - Agensi Standalone Skills (`skills/`)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version & Environment
+      placeholder: "e.g. v0.3.0, Windows 11 x64, Python 3.12, Codex CLI v0.148.0"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear description, reproduction steps, and observed error output (sanitized).
+    validations:
+      required: true

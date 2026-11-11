@@ -29,7 +29,7 @@ Run the zero-dependency analyzer `scripts/log_analyzer.py` on any `.log` / `.out
 Connect your desktop/CLI client to your local `gaussian-dsh-plugin` MCP server using `templates/mcp-config.json`:
 1. `parse_gaussian_output` — Extracts full structured energetics, orbital gaps, frequencies, thermochemistry, and multi-step `--Link1--` health.
 2. `diagnose_gaussian_error` — Combines log traceback detection with fix strategies.
-3. `gaussian_calc_history` / `extract_structure_from_file` — Inspect prior runs and extract final optimized SMILES/XYZ geometry via OpenBabel.
+3. `list_gaussian_jobs` / `extract_structure_from_file` — Inspect prior runs and extract final optimized SMILES/XYZ geometry via OpenBabel.
 
 ## Scientific Verification Checklist
 

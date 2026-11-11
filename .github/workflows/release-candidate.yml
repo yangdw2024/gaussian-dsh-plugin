@@ -1,0 +1,57 @@
+name: Release Candidate Assembly (Manual Only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version tag (without v prefix)"
+        required: true
+        default: "0.3.0"
+
+jobs:
+  build-release-candidate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies + PyInstaller
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-mcp.txt pyinstaller
+          npm install --no-audit --no-fund
+
+      - name: Build Windows backend EXE & deploy runtime
+        shell: pwsh
+        run: |
+          .\scripts\build_backend.ps1 -PythonPath (Get-Command python).Source
+          .\scripts\deploy_runtime.ps1 -Version "${{ github.event.inputs.version }}"
+
+      - name: Run full verification suite
+        env:
+          GAUSSIAN_ALLOW_REAL_EXECUTION: "false"
+        run: |
+          python -m unittest discover -s tests -v
+
+      - name: Build npm tarballs & Agensi skill ZIPs
+        run: |
+          node scripts/build_npm_packages.mjs
+          python scripts/package_agensi_skills.py
+
+      - name: Upload release candidate artifacts (requires manual publish approval)
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaussian-dsh-plugin-rc-${{ github.event.inputs.version }}
+          path: dist/release-candidate/
+          retention-days: 14

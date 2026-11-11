@@ -30,9 +30,9 @@ Use the bundled zero-dependency Python helper `scripts/gjf_helper.py` alongside 
 
 ### Mode B: Local MCP Integration (Optional)
 If running inside a desktop/CLI agent (Claude Desktop, Codex CLI, Cursor) with the open-source `gaussian-dsh-plugin` backend installed locally (see `templates/mcp-config.json`):
-1. `smiles_to_3d` / `generate_gaussian_input` for RDKit ETKDGv3 3D conformer generation and safe sandboxed `.gjf` creation.
-2. `get_basis_set` / `list_basis_sets` for Basis Set Exchange (BSE) `Gen` / `GenECP` pseudopotential blocks (e.g., `SDD` / `Def2-TZVP` on transition metals).
-3. `gaussian_keywords` for curated DFT functional, dispersion, solvation, and convergence keyword lookup.
+1. `generate_gaussian_input_from_smiles` / `generate_gaussian_input` / `extract_structure_from_file` for RDKit ETKDGv3 3D conformer generation and safe sandboxed `.gjf` creation.
+2. `get_basis_set` / `search_basis_sets` for Basis Set Exchange (BSE) `Gen` / `GenECP` pseudopotential blocks (e.g., `SDD` / `Def2-TZVP` on transition metals).
+3. `search_gaussian_keywords` for curated DFT functional, dispersion, solvation, and convergence keyword lookup.
 
 > **Important Security Boundary**: Input generation does **not** invoke Gaussian 16 automatically. Keep `GAUSSIAN_ALLOW_REAL_EXECUTION=false` unless explicitly running an out-of-band human-authorized calculation on your own licensed workstation.
 
