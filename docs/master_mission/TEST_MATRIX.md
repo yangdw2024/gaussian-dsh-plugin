@@ -39,3 +39,11 @@
 | :--- | :--- | :--- | :--- |
 | Agensi ZIP Pack & Audit | `py312 scripts/package_agensi_skills.py` | **PASS (3 ZIPs, 7556B / 6656B / 5643B)** | `SKILL.md` 位于 ZIP 根，零密钥/私人路径 |
 | Phase 7 Standalone Skills Tests | `py312 -m unittest tests.test_agensi_skills_phase7 -v` | **PASS (`4/4` OK, 0.242s)** | 实测 `gjf_helper.py`, `log_analyzer.py`, `multiwfn_recipe.py` 与 ZIP 构建 |
+
+### Phases 9–11 最终全量验收基线（2026-11-12）
+| 检查项 | 命令 / 方式 | 实测结果 | 备注 |
+| :--- | :--- | :--- | :--- |
+| Full Release Candidate Assembly | `py312 scripts/assemble_release_candidate.py --version 0.3.0` | **PASS (`9` files, Secret scan `0` hits)** | 双 `.tgz` + `win32-x64.zip` + `mcp-src.zip` + 3 Agensi ZIP + `SHA256SUMS.txt` |
+| SHA-256 Independent Verification | Python `hashlib.sha256` check vs `SHA256SUMS.txt` | **PASS (`9/9` matched)** | 全部签名完全吻合 |
+| MCP Source ZIP Cleanliness | Inspect `gaussian-mcp-server-0.3.0-src.zip` | **PASS (`47` files, `0` junk/pyc)** | 无 `__pycache__` / `.pyc` / `.bak` |
+| **FINAL Full Python Suite (post last code/build edit)** | `py312 -m unittest discover -s tests -v` | **PASS (`110/110` OK, 34.319s)** | 全部测试零失败、零跳过 |

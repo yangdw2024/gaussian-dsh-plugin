@@ -41,3 +41,9 @@
 - [x] **开源治理文档**：创建 `CHANGELOG.md`、`CONTRIBUTING.md`、`SECURITY.md`、`TROUBLESHOOTING.md`、`THIRD_PARTY_LICENSES.md`（逐项核验 `importlib.metadata` 与 OpenBabel `3.2.1` GPL-2.0-only 许可）。
 - [x] **GitHub Issue 模板与 CI/CD 工作流**：创建 `.github/ISSUE_TEMPLATE/{bug_report.yml,feature_request.yml}` 及 `.github/workflows/{ci.yml,release-candidate.yml}`（仅人工 `workflow_dispatch` 组装产物，绝不自动对外发布）。
 - [x] **技能文本同步修正**：同步 `skills/*/SKILL.md` Mode B 中的精确 MCP 工具名并重跑 `scripts/package_agensi_skills.py` 验证通过（`7573B` / `6653B` / `5610B`）。
+
+## Phases 9–11 最终汇编与交付记录（2026-11-12）
+- [x] **新增一键汇编脚本 (`scripts/assemble_release_candidate.py`)**：清理并重新产出完整 `dist/release-candidate/`（`yangdw2024-gp-0.3.0.tgz`、`gd-gp-0.3.0.tgz`、`gaussian-backend-0.3.0-win32-x64.zip`、`gaussian-mcp-server-0.3.0-src.zip`、`requirements-mcp.txt`、`agensi/*.zip`、`RELEASE_NOTES.md`、`SHA256SUMS.txt`）。
+- [x] **安全扫描与校验和核验**：`git ls-files` 全仓秘密扫描 `0 hits`；`SHA256SUMS.txt` `9/9` 文件独立复核一致；`gaussian-mcp-server-0.3.0-src.zip` `47` 文件无缓存垃圾。
+- [x] **最终全量回归（最后一次代码与构建变更后）**：`py312 -m unittest discover -s tests -v` -> **`Ran 110 tests in 34.319s — OK`** (`EXIT=0`)。
+- [x] **收尾交付文档**：完成 `RELEASE_MANIFEST.md`、`RELEASE_CHECKLIST.md`、`TEST_MATRIX.md`、`TASK_BOARD.md`、`CHECKPOINT.md` 与 `FINAL_REPORT.md`，全任务进入 `READY_FOR_APPROVAL`。

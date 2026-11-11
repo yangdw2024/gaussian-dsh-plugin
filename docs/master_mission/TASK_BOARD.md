@@ -56,3 +56,9 @@
   - 完成 `README.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`SECURITY.md`、`TROUBLESHOOTING.md`、`THIRD_PARTY_LICENSES.md`、`.github/`
   - 校验全部 `README.md` 站内链接与更新后 Agensi ZIP 重建均通过
 - 下一阶段：Phases 9–11（组装完整 `dist/release-candidate/` 产物与 `SHA256SUMS`、全仓密钥/路径扫描、最终全量测试/打包/MAX_PATH 验收、`RELEASE_MANIFEST.md`、`RELEASE_CHECKLIST.md`、`FINAL_REPORT.md` 与最终本地提交）
+
+### Phases 9–11 更新状态（2026-11-12）
+- Phase 9（Release Candidate 组装、校验和、秘密扫描）：**COMPLETED**
+- Phase 10（最终全量 110 项自动化测试与产物独立核验）：**COMPLETED**
+- Phase 11（交付报告与 `READY_FOR_APPROVAL` 收尾提交）：**COMPLETED**
+- 外部公开操作（`git push`, `merge main`, `npm publish`, GitHub Release, Agensi 上架, 真实 `g16.exe` 执行）：**HUMAN_APPROVAL_REQUIRED**

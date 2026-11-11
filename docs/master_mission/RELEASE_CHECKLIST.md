@@ -1,14 +1,22 @@
-# 发布准入检查清单 (RELEASE_CHECKLIST)
+# Release Readiness Checklist (`v0.3.0`)
 
-| Check ID | 检查项 | 门禁要求 | 当前状态 | 证据 / 备注 |
-| :--- | :--- | :--- | :--- | :--- |
-| `RC-01` | Git 分支与工作区状态 | 处于 `feature/mcp-server` 且最终全部变动已提交 | `IN_PROGRESS` | 严禁擅自合并或推送到 `main` |
-| `RC-02` | V5.3 真实计算审批边界 | `GAUSSIAN_ALLOW_REAL_EXECUTION=false` 保持默认关闭 | `TODO` | 真实计算须人工批准 (`HUMAN_APPROVAL_REQUIRED`) |
-| `RC-03` | MCP 工具完整性与降级 | 17 核心工具全部通过契约与测试，可选 Sobko 不阻断启动 | `TODO` | Phase 2 |
-| `RC-04` | 科学正确性与 Mock 隔离 | `is_simulated=True` 与 `final_energy=None` 严禁混淆 | `TODO` | Phase 3 |
-| `RC-05` | 安全审计与漏洞扫描 | 无路径穿越、Junction 绕过、命令注入或密钥泄露 | `TODO` | Phase 4 & 10 |
-| `RC-06` | Windows `MAX_PATH` 与 `@yangdw2024/gp` | 在 `LongPathsEnabled=0` 下完成真实离线安装与启动 | `TODO` | Phase 6 |
-| `RC-07` | Agensi Skills 合规 ZIP | 根目录含 `SKILL.md` + `version`，无硬编码路径/密钥 | `TODO` | Phase 7 |
-| `RC-08` | 开源治理与第三方许可 | 补全 `CHANGELOG` / `SECURITY` / `THIRD_PARTY_LICENSES` / CI | `TODO` | Phase 8 |
-| `RC-09` | RC 候选包与校验和 | `dist/release-candidate/` 完整生成并附 `SHA256SUMS` | `TODO` | Phase 9–10 |
-| `RC-10` | 最终全量回归零失败 | 最终代码冻结后所有非外部阻塞测试 100% 通过 | `TODO` | Phase 11 |
+## 一、自动化工程门禁（均已实测通过）
+
+- [x] 版本号同步升级至 `0.3.0`（`backend/config.py`, `src/index.js`, `package.json`, `runtime.json`, `scripts/deploy_runtime.ps1`, `tests/test_mcp_batch1.py`）
+- [x] 包名正式回归 `@yangdw2024/gp`（同步 `package.json`, `cordis.patch.yml`, `src/client.js`, `scripts/verify_*.mjs`）并提供 `@gd/gp` 兼容构建脚本
+- [x] `node scripts/build.mjs` 重建 `lib/index.js`（`41.0kb`）与 `lib/client.js`（`7.2kb`），DSH 19 工具 + 1 Prompt 注册核验通过
+- [x] PyInstaller 重建 `runtimes/win32-x64/b/gaussian-backend.exe`（`contents_directory="."` 消除 `_internal/`，文件数 `2150 -> 1064`）
+- [x] Windows `MAX_PATH=260` 彻底根治：包内最长相对路径 `96` 字符；隔离 `153` 字符深度 DSH 离线 `npm install` 实测最长全路径 `249 < 260`，且深度启动 EXE 与 RDKit 接口全通
+- [x] 全量 Python 自动化套件最终回归：**`110/110` tests OK (`34.319s`, `EXIT=0`)**（含 7 项红队授权攻击测试、5 项编译后 EXE 跨进程锁/取消并发测试、10 项科学计算边界测试、7 项安全四期测试、4 项 Agensi 独立工具与打包测试）
+- [x] 多客户端兼容性：Codex CLI `v0.148.0` 隔离 `CODEX_HOME` 实机 `4` 工具调用 `EXIT=0`；`examples/mcp_configs/` 脱敏模板已备；`claude`/`cursor` 诚实标注 `NOT_RUN`
+- [x] Agensi 产品化：`3` 份 standalone Skill ZIP（`SKILL.md` 在 ZIP 根目录 + 零依赖 Python CLI）通过全部内容与脱敏核验
+- [x] 开源治理：`README.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`SECURITY.md`、`TROUBLESHOOTING.md`、`THIRD_PARTY_LICENSES.md` 与 `.github/` 模板/CI 就绪
+- [x] 安全红线确认：真实 `D:\G16W\g16.exe` 从未触发，用户 `~/.codex/config.toml` 与 `%APPDATA%\dsh-desktop` 保持零改动
+
+## 二、人工审批发布门禁（`HUMAN_APPROVAL_REQUIRED` — 必须由项目所有者确认后手动执行）
+
+- [ ] **合并与推送 Git**：人工复核 `git diff main..feature/mcp-server` 后再执行 `merge` 与 `git push`
+- [ ] **发布 npm 包**：`npm publish ./dist/release-candidate/yangdw2024-gp-0.3.0.tgz`（需 OTP / 账号授权）
+- [ ] **创建 GitHub Release**：上传 `dist/release-candidate/` 产物与 `SHA256SUMS.txt`，采用 `RELEASE_NOTES.md`
+- [ ] **提交 Agensi Marketplace**：访问 `https://www.agensi.io/sell` 手动上传 `dist/agensi/*-v0.3.0.zip` 并设定商业定价
+- [ ] **开启真实 Gaussian（若用户本机需跑实算）**：仅当人工显式需要执行实算时，设置 `GAUSSIAN_ALLOW_REAL_EXECUTION=true` 并使用 `scripts/approve_gaussian_job.py` 线下授权单次任务
