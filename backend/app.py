@@ -290,6 +290,51 @@ def admin_gc(request: Request, dry_run: bool = False, authorization: Optional[st
     return {"ok": True, "result": sweep(dry_run=dry_run)}
 
 
+class AdminJobApproveRequest(BaseModel):
+    gjf_path: str = Field(..., description="受控工作目录内待授权的 .gjf 文件路径")
+    preflight_id: str = Field(..., description="预检返回的 preflight_id")
+    expected_sha256: Optional[str] = Field(None, description="待授权文件的预期 SHA-256 摘要")
+    job_name: Optional[str] = Field(None, description="任务名")
+    mem: Optional[str] = Field(None, description="显式申请的内存上限")
+    nproc: Optional[int] = Field(None, description="显式申请的 CPU 核数")
+    approved_by: str = Field("host_admin_operator", description="批准人标识")
+    ttl_seconds: int = Field(600, ge=30, le=3600, description="一次性授权有效期（秒）")
+    save_receipt: bool = Field(True, description="是否保存受信任宿主机授权凭据")
+
+
+@app.post("/v1/admin/jobs/approve")
+def admin_approve_gaussian_job(
+    req: AdminJobApproveRequest,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+):
+    """宿主管理员接口：为精确 SHA-256 与资源上限的 Gaussian 任务签发一次性人工执行授权。
+
+    严格受 _require_admin 鉴权保护，仅供宿主 UI/管理员调用，绝不通过 MCP 暴露给 Agent。
+    """
+    _require_admin(request, authorization)
+    from .execution_policy import authorize_calculation_as_human
+
+    try:
+        return authorize_calculation_as_human(
+            gjf_path=Path(req.gjf_path),
+            preflight_id=req.preflight_id,
+            expected_sha256=req.expected_sha256,
+            job_name=req.job_name,
+            mem=req.mem,
+            nproc=req.nproc,
+            approved_by=req.approved_by,
+            ttl_seconds=req.ttl_seconds,
+            save_receipt=req.save_receipt,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 # ============ 输入生成 ============
 
 def _check_atom_count(n: int) -> None:

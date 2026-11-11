@@ -33,6 +33,7 @@ JOB_TYPE_KEYWORDS = {
     "opt": "opt",
     "freq": "freq",
     "opt+freq": "opt freq",
+    "opt freq": "opt freq",
     "td": "td",
     "irc": "irc",
     "scan": "scan",

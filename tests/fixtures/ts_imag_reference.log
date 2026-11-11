@@ -1,0 +1,27 @@
+ Entering Link 1 = C:\G16W\l1.exe PID=     1236.
+ ******************************************
+ Gaussian 16:  ES64W-G16RevA.03  25-Dec-2016
+ ******************************************
+ # B3LYP/6-31G(d) opt=(ts,calcfc,noeigen) freq
+ 
+ Transition State with Imaginary Frequency
+ 
+ Charge =  0 Multiplicity = 1
+ 
+ SCF Done:  E(RB3LYP) =  -155.123456789     A.U. after    9 cycles
+ 
+ Alpha  occ. eigenvalues --   -0.41200   -0.35400   -0.28500
+ Alpha virt. eigenvalues --    0.04500    0.11200
+ 
+ Harmonic frequencies (cm**-1), IR intensities (KM/Mole):
+                     1                      2                      3
+                    A                      A                      A
+ Frequencies --  -485.3200              1250.4500              1890.1200
+ 
+ - Thermochemistry -
+ Zero-point correction=                           0.054321 (Hartree/Particle)
+ Thermal correction to Enthalpy=                  0.059876
+ Thermal correction to Gibbs Free Energy=         0.031200
+ Sum of electronic and thermal Free Energies=          -155.092257
+ 
+ Normal termination of Gaussian 16 at Tue Nov 10 20:10:00 2026.

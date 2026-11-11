@@ -1,0 +1,13 @@
+ Entering Link 1 = C:\G16W\l1.exe PID=     1237.
+ ******************************************
+ Gaussian 16:  ES64W-G16RevA.03  25-Dec-2016
+ ******************************************
+ # B3LYP/6-31G(d) opt
+ 
+ Difficult System SCF Failure
+ 
+ Charge =  0 Multiplicity = 1
+ 
+ Convergence failure -- run terminated.
+ Error termination via Lnk1e in C:\G16W\l502.exe at Tue Nov 10 20:15:00 2026.
+ Job cpu time:       0 days  0 hours  2 minutes 45.0 seconds.

@@ -1,0 +1,74 @@
+{
+  "timestamp": "2026-11-11T07:02:53Z",
+  "client": "Codex CLI",
+  "model": "gpt-5.6-sol",
+  "security_flags": "--approve-for-me --ephemeral",
+  "total_tested": 5,
+  "passed": 5,
+  "pass_rate": "100.0%",
+  "results": [
+    {
+      "index": 1,
+      "test": "search_gaussian_keywords",
+      "required_tools": {
+        "search_gaussian_keywords": true
+      },
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_seconds": 17.85,
+      "codex_output_preview": "{\"keyword\":\"B3LYP\",\"count\":3}",
+      "codex_events_preview": "Reading additional input from stdin...\nOpenAI Codex v0.148.0\n--------\nworkdir: E:\\YDW\\ChemDatas\\gaussian-dsh-plugin\nmodel: gpt-5.6-sol\nprovider: openai\napproval: on-request\nsandbox: workspace-write [workdir, /tmp, $TMPDIR]\nreasoning effort: medium\nreasoning summaries: none\nsession id: 01a1c968-fc4c-75e3-ad24-8e2b0e5645ed\n--------\nuser\nCall the search_gaussian_keywords tool from the gaussian MCP server with query='B3LYP'. Output a one-line JSON object containing keyword 'B3LYP' and the count of matches returned.\ncodex\n我会直接调用 Gaussian MCP 的关键词检索，并只返回所需的一行 JSON。\nmcp: gaussian/search_gaussian_keywords started\nmcp: gaussian/search_gaussian_keywords (completed)\ncodex\n{\"keyword\":\"B3LYP\",\"count\":3}\ntokens used\n5,785"
+    },
+    {
+      "index": 2,
+      "test": "search_basis_sets",
+      "required_tools": {
+        "search_basis_sets": true
+      },
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_seconds": 14.048,
+      "codex_output_preview": "{\"name\":\"def2-svp\",\"total_results\":4}",
+      "codex_events_preview": "Reading additional input from stdin...\nOpenAI Codex v0.148.0\n--------\nworkdir: E:\\YDW\\ChemDatas\\gaussian-dsh-plugin\nmodel: gpt-5.6-sol\nprovider: openai\napproval: on-request\nsandbox: workspace-write [workdir, /tmp, $TMPDIR]\nreasoning effort: medium\nreasoning summaries: none\nsession id: 01a1c969-3af9-7961-9e2b-835af9e48ab8\n--------\nuser\nCall the search_basis_sets tool from the gaussian MCP server with query='def2-svp' and limit=5. Output a one-line JSON object containing the first matched basis set name and total results.\ncodex\nI’ll call the Gaussian MCP search exactly as requested and return only the compact JSON result.\nmcp: gaussian/search_basis_sets started\nmcp: gaussian/search_basis_sets (completed)\ncodex\n{\"name\":\"def2-svp\",\"total_results\":4}\ntokens used\n18,020"
+    },
+    {
+      "index": 3,
+      "test": "get_basis_set",
+      "required_tools": {
+        "get_basis_set": true
+      },
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_seconds": 22.706,
+      "codex_output_preview": "{\"format\":\"gaussian94\",\"content_length\":1312}",
+      "codex_events_preview": "---\nworkdir: E:\\YDW\\ChemDatas\\gaussian-dsh-plugin\nmodel: gpt-5.6-sol\nprovider: openai\napproval: on-request\nsandbox: workspace-write [workdir, /tmp, $TMPDIR]\nreasoning effort: medium\nreasoning summaries: none\nsession id: 01a1c969-71dc-7d80-bc27-4062ff0ff39f\n--------\nuser\nCall the get_basis_set tool from the gaussian MCP server with name='6-31g*', elements=[1, 6], format='gaussian94', save_to_file=false. Output a one-line JSON object with format and content_length.\ncodex\nI’ll call the Gaussian basis-set tool with the exact parameters and return only the requested JSON line.\nmcp: gaussian/get_basis_set started\nmcp: gaussian/get_basis_set (completed)\nmcp: gaussian/get_basis_set started\nmcp: gaussian/get_basis_set (completed)\ncodex\n{\"format\":\"gaussian94\",\"content_length\":1312}\ntokens used\n4,533"
+    },
+    {
+      "index": 4,
+      "test": "stop_gaussian_calculation",
+      "required_tools": {
+        "generate_gaussian_input": true,
+        "submit_gaussian_calculation": true,
+        "stop_gaussian_calculation": true
+      },
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_seconds": 27.814,
+      "codex_output_preview": "{\"job_id\":\"ff39bc751646\",\"stop_ok\":true,\"status\":\"stopped\",\"is_simulated\":true,\"real_gaussian_result\":false}",
+      "codex_events_preview": ", mock_mode=true, mock_duration=15.0. Confirm is_simulated and real_gaussian_result. 3) Call stop_gaussian_calculation with the returned job_id. Output a single JSON object containing job_id, stop_ok, status, is_simulated, and real_gaussian_result.\ncodex\nI’ll use the Gaussian MCP workflow exactly as specified, preserving the returned path and job ID between calls.\nmcp: gaussian/generate_gaussian_input started\nmcp: gaussian/generate_gaussian_input (completed)\nmcp: gaussian/submit_gaussian_calculation started\nmcp: gaussian/submit_gaussian_calculation (completed)\nmcp: gaussian/stop_gaussian_calculation started\nmcp: gaussian/stop_gaussian_calculation (completed)\ncodex\n{\"job_id\":\"ff39bc751646\",\"stop_ok\":true,\"status\":\"stopped\",\"is_simulated\":true,\"real_gaussian_result\":false}\ntokens used\n32,495"
+    },
+    {
+      "index": 5,
+      "test": "submit_gaussian_calculation_auth_guard",
+      "required_tools": {
+        "generate_gaussian_input": true,
+        "submit_gaussian_calculation": true
+      },
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_seconds": 29.455,
+      "codex_output_preview": "{\"ok\":false,\"rejected_layer\":\"human_authorization\",\"error\":\"Human authorization required: Agent-supplied flags (confirmed=True) and preflight integrity tokens do NOT grant execution permission. Operator must authorize this exact task via scripts/approve_gaussian_job.py or host admin UI.\"}",
+      "codex_events_preview": "ut launching Gaussian. Output a single JSON object containing ok, rejected_layer, and error.\ncodex\nI’ll run the exact guarded MCP sequence and return only the requested JSON result.\nmcp: gaussian/generate_gaussian_input started\nmcp: gaussian/generate_gaussian_input (completed)\nmcp: gaussian/submit_gaussian_calculation started\nmcp: gaussian/submit_gaussian_calculation (completed)\nmcp: gaussian/submit_gaussian_calculation started\nmcp: gaussian/submit_gaussian_calculation (completed)\ncodex\n{\"ok\":false,\"rejected_layer\":\"human_authorization\",\"error\":\"Human authorization required: Agent-supplied flags (confirmed=True) and preflight integrity tokens do NOT grant execution permission. Operator must authorize this exact task via scripts/approve_gaussian_job.py or host admin UI.\"}\ntokens used\n12,182"
+    }
+  ]
+}

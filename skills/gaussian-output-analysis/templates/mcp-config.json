@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "gaussian": {
+      "command": "python",
+      "args": [
+        "<PATH_TO_GAUSSIAN_MCP_SERVER>/mcp_server.py"
+      ],
+      "env": {
+        "GAUSSIAN_WORK_DIR": "<PATH_TO_YOUR_CALCULATION_DIRECTORY>"
+      }
+    }
+  }
+}
