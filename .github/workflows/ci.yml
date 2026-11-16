@@ -34,7 +34,7 @@ jobs:
 
       - name: Build DSH JS bundle
         run: |
-          npm install --no-audit --no-fund
+          npm install --no-audit --no-fund esbuild@0.25.12
           node scripts/build.mjs
 
       - name: Run Python test suite (safe mock/unit tests only)
