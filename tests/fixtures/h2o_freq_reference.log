@@ -1,0 +1,46 @@
+ Entering Link 1 = C:\G16W\l1.exe PID=     1235.
+ ******************************************
+ Gaussian 16:  ES64W-G16RevA.03  25-Dec-2016
+ ******************************************
+ %mem=12GB
+ %nprocshared=8
+ # B3LYP/6-31G(d) freq
+ 
+ H2O Frequency and Thermochemistry
+ 
+ Charge =  0 Multiplicity = 1
+ 
+ SCF Done:  E(RB3LYP) =  -76.4089528701     A.U. after    8 cycles
+ 
+ Alpha  occ. eigenvalues --   -0.50123   -0.45012   -0.34567   -0.30145
+ Alpha virt. eigenvalues --    0.08920    0.15430
+ 
+ Harmonic frequencies (cm**-1), IR intensities (KM/Mole), Raman scattering
+ activities (A**4/AMU), depolarization ratios for plane and unpolarized
+ incident light, reduced masses (AMU), force constants (mDyne/A),
+ and normal coordinates:
+                     1                      2                      3
+                    A1                     B2                     A1
+ Frequencies --  1648.5020              3825.1200              3935.4500
+ Red. masses --     1.0825                 1.0450                 1.0820
+ Frc consts  --     1.7340                 8.9820                 9.8750
+ IR Inten    --    75.2000                35.1000                52.4000
+ 
+ - Thermochemistry -
+ -------------------
+ Temperature   298.150 Kelvin.  Pressure   1.00000 Atm.
+ Zero-point correction=                           0.021540 (Hartree/Particle)
+ Thermal correction to Energy=                    0.024376
+ Thermal correction to Enthalpy=                  0.025320
+ Thermal correction to Gibbs Free Energy=         0.003920
+ Sum of electronic and zero-point Energies=             -76.387413
+ Sum of electronic and thermal Energies=                -76.384577
+ Sum of electronic and thermal Enthalpies=              -76.383633
+ Sum of electronic and thermal Free Energies=           -76.405033
+ 
+ Dipole moment (field-independent basis, Debye):
+    X=     0.0000    Y=     0.0000    Z=     1.8540  Tot=     1.8540
+ 
+ Job cpu time:       0 days  0 hours  0 minutes  5.6 seconds.
+ Elapsed time:       0 days  0 hours  0 minutes  3.2 seconds.
+ Normal termination of Gaussian 16 at Tue Nov 10 20:05:00 2026.

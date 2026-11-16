@@ -44,25 +44,57 @@ class GaussianJob:
     current_step: Optional[int] = None
     last_energy: Optional[float] = None
     log_tail: str = ""
+    # V5.1: 明确区分模拟计算与真实 Gaussian 计算 + 授权审计摘要
+    is_simulated: bool = False
+    execution_mode: str = "gaussian16"  # "gaussian16" | "mock_simulation"
+    simulated_energy: Optional[float] = None
+    simulation_warning: Optional[str] = None
+    authorization_summary: Optional[Dict] = None
 
 
 class JobManager:
-    """任务管理器（单例）。"""
+    """任务管理器（单例，支持跨进程状态协调与原子落盘）。"""
 
     def __init__(self) -> None:
-        self.jobs_dir = settings.data_dir / "jobs"
+        self._explicit_jobs_dir: Optional[Path] = None
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self._processes: Dict[str, subprocess.Popen] = {}
         # R5a: Popen 成功后的运行态 job 对象（磁盘主记录可能因写盘失败仍停在 pending/pid=None），
         # 用于当前进程内进程退出时统一 finalize、释放 lease，不依赖磁盘记录。
         self._running_jobs: Dict[str, GaussianJob] = {}
 
+    @property
+    def jobs_dir(self) -> Path:
+        if self._explicit_jobs_dir is not None:
+            d = self._explicit_jobs_dir
+        else:
+            env_dir = os.environ.get("GAUSSIAN_DATA_DIR")
+            d = (Path(env_dir) if env_dir else settings.data_dir) / "jobs"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @jobs_dir.setter
+    def jobs_dir(self, value: Path) -> None:
+        self._explicit_jobs_dir = Path(value)
+
+    @staticmethod
+    def _work_dir() -> Path:
+        env_w = os.environ.get("GAUSSIAN_WORK_DIR")
+        w = Path(env_w) if env_w else settings.work_dir
+        w.mkdir(parents=True, exist_ok=True)
+        return w
+
     def _job_file(self, job_id: str) -> Path:
         return self.jobs_dir / f"{job_id}.json"
 
     def _save(self, job: GaussianJob) -> None:
-        with open(self._job_file(job.job_id), "w", encoding="utf-8") as f:
+        """原子写盘，防止跨进程并发读取到半截 JSON。"""
+        target = self._job_file(job.job_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f".{job.job_id}.{os.getpid()}.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(asdict(job), f, ensure_ascii=False, indent=2)
+        os.replace(tmp, target)
 
     def _recover_file(self, job_id: str) -> Path:
         return self.jobs_dir / f"{job_id}.recover.json"
@@ -81,10 +113,15 @@ class JobManager:
                 "log_path": job.log_path,
                 "chk_path": job.chk_path,
                 "started_at": job.started_at,
+                "is_simulated": job.is_simulated,
+                "execution_mode": job.execution_mode,
                 "recover": True,
             }
-            with open(self._recover_file(job.job_id), "w", encoding="utf-8") as f:
+            target = self._recover_file(job.job_id)
+            tmp = target.with_name(f".{job.job_id}.{os.getpid()}.recover.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, target)
             return True
         except Exception:
             return False
@@ -113,7 +150,9 @@ class JobManager:
             return None
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return GaussianJob(**data)
+        valid_keys = GaussianJob.__dataclass_fields__.keys()
+        filtered = {k: v for k, v in data.items() if k in valid_keys}
+        return GaussianJob(**filtered)
 
     def list_jobs(self, limit: int = 50) -> List[Dict]:
         """列出所有任务（按创建时间倒序）。R5b: 排除 *.recover.json，避免同一 job 重复出现。"""
@@ -170,10 +209,27 @@ class JobManager:
     def _finalize_if_dead(self, job: GaussianJob, trust_handle: bool = False) -> bool:
         """若 running 任务的进程已退出，按日志落为 completed/failed 并释放 lease。
 
-        返回 True 表示本次判定为已结束（调用方据此不再视为 running）。
-        trust_handle=True 时表示 Popen 句柄 poll() 已确认退出，不再用裸 PID 存活性
-        否决（避免 PID 快速复用时误判进程仍存活）。
+        V5.1 跨进程一致性保护：回写终态前先复查磁盘主记录，若另一进程（如 DSH UI 与 MCP Server）
+        已将其标记为 stopped/completed/failed，直接采纳磁盘终态而不覆写。
         """
+        # 优先检查磁盘是否已由其他进程落终态
+        try:
+            disk_job = self._load(job.job_id)
+            if disk_job and disk_job.status in {"stopped", "completed", "failed"}:
+                job.status = disk_job.status
+                job.finished_at = disk_job.finished_at
+                job.error = disk_job.error
+                self._release_lease(job.job_id)
+                proc = self._processes.pop(job.job_id, None)
+                if proc is not None:
+                    try:
+                        proc.wait(timeout=0.5)
+                    except Exception:
+                        pass
+                return True
+        except Exception:
+            pass
+
         if job.status != "running":
             return False
         if not trust_handle and job.pid and self._pid_alive(job.pid):
@@ -192,6 +248,12 @@ class JobManager:
             job.error = "进程已退出但日志未检测到 Normal termination"
         self._release_lease(job.job_id)
         self._save(job)
+        proc = self._processes.pop(job.job_id, None)
+        if proc is not None:
+            try:
+                proc.wait(timeout=0.5)
+            except Exception:
+                pass
         return True
 
     def _reap_ram_jobs(self) -> None:
@@ -438,9 +500,13 @@ class JobManager:
         return stats
 
     def submit(self, job_name: str, gjf_content: str, mem: Optional[str] = None,
-               nproc: Optional[int] = None) -> Dict:
-        """提交一个 Gaussian 任务（串行：统一 lease 互斥，若有运行中任务则拒绝）。
+               nproc: Optional[int] = None, mock_mode: bool = False,
+               fail_scf: bool = False, mock_duration: float = 0.5,
+               authorization_summary: Optional[Dict] = None) -> Dict:
+        """提交一个 Gaussian 任务（跨进程串行：统一 lease 互斥，若有运行中任务则拒绝）。
 
+        支持 mock_mode 模拟运行，用于自动化生命周期测试和安全校验；
+        真实 g16.exe 计算必须满足 GAUSSIAN_ALLOW_REAL_EXECUTION 显式授权。
         返回任务信息字典。
         """
         # M6: 内存 hard 阈值时拒绝新任务（不杀已有进程）
@@ -456,15 +522,16 @@ class JobManager:
                 ),
             }
 
-        # 重启孤儿兜底：内存 lease 可能为空，但持久化记录的 Gaussian 仍存活
+        # 重启孤儿兜底：快速预检是否有运行中任务
         if self.has_running():
             return {"ok": False, "error": "已有 Gaussian 任务在运行，必须串行执行。请等待当前任务完成后再提交。"}
 
         job_id = uuid.uuid4().hex[:12]
         safe_name = re.sub(r"[^\w\-.]", "_", job_name.strip()) or "gaussian_job"
-        gjf_path = settings.work_dir / f"{safe_name}_{job_id}.gjf"
-        log_path = settings.work_dir / f"{safe_name}_{job_id}.log"
-        chk_path = settings.work_dir / f"{safe_name}_{job_id}.chk"
+        work_dir = self._work_dir()
+        gjf_path = work_dir / f"{safe_name}_{job_id}.gjf"
+        log_path = work_dir / f"{safe_name}_{job_id}.log"
+        chk_path = work_dir / f"{safe_name}_{job_id}.chk"
 
         # B7: 提交边界校验 GJF（原子数 / 资源 / 电荷多重度），禁止原文绕过
         from .gaussian_input import validate_gjf
@@ -473,11 +540,20 @@ class JobManager:
         except ValueError as e:
             return {"ok": False, "error": f"GJF 校验未通过：{e}"}
 
-        # B1: 原子获取 gaussian lease（scheduler 内部加锁，杜绝并发请求同时通过检查）
+        # 选择命令：mock 进程还是真实 g16.exe
+        use_mock = mock_mode or os.environ.get("GAUSSIAN_MOCK_MODE", "").lower() in {"1", "true", "yes"}
+        exec_mode = "mock_simulation" if use_mock else "gaussian16"
+
+        # B1 / V5.1: 跨进程原子获取 gaussian lease（内核文件锁串行，杜绝 DSH 与 MCP 双客户端并发竞争）
         try:
             chem_scheduler.acquire(job_id, "gaussian")
         except ResourceBusyError as e:
             return {"ok": False, "error": f"计算资源被占用，无法提交：{e}"}
+
+        # 二次核查（持跨进程 lease 后）：防止孤儿残留任务未持有 lease 时发生竞态
+        if self.has_running():
+            self._release_lease(job_id)
+            return {"ok": False, "error": "已有 Gaussian 任务在运行，必须串行执行。请等待当前任务完成后再提交。"}
 
         job = GaussianJob(
             job_id=job_id,
@@ -486,14 +562,17 @@ class JobManager:
             gjf_path=str(gjf_path),
             log_path=str(log_path),
             chk_path=str(chk_path),
+            is_simulated=bool(use_mock),
+            execution_mode=exec_mode,
+            simulation_warning=(
+                "MOCK SIMULATION ONLY: Executed via backend.mock_worker (NOT real g16.exe). "
+                "Do NOT treat simulated energies as real Gaussian calculation results."
+                if use_mock
+                else None
+            ),
+            authorization_summary=authorization_summary,
         )
 
-        # N2/R5: 统一事务边界。lease 与"是否真的启动了进程"绑定：
-        # - Popen 之前任何失败（写文件、构造命令、exe 缺失）→ 未启动，释放 lease 记 failed；
-        # - Popen 成功后（含随后 _save 失败）→ Gaussian 已在跑，【绝不释放 lease】，
-        #   否则会允许第二个 Gaussian 并发。
-        # R5: 先落一条 pending 持久化——即使 running 状态两次保存都失败，JSON 记录仍在，
-        # reconcile/终态扫描能按 pid 找到它并最终释放 lease，不会永久 busy 或重启丢失。
         proc_started = False
         try:
             self._save(job)
@@ -505,29 +584,65 @@ class JobManager:
             with open(gjf_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(content)
 
-            # Windows: g16.exe input.gjf output.log
-            cmd = [settings.gaussian_exe, str(gjf_path), str(log_path)]
+            if use_mock:
+                import sys
+                if getattr(sys, "frozen", False):
+                    cmd = [
+                        sys.executable,
+                        "--mock-worker",
+                        str(gjf_path),
+                        str(log_path),
+                        "--duration",
+                        str(mock_duration),
+                    ]
+                else:
+                    cmd = [
+                        sys.executable,
+                        "-m",
+                        "backend.mock_worker",
+                        str(gjf_path),
+                        str(log_path),
+                        "--duration",
+                        str(mock_duration),
+                    ]
+                if fail_scf:
+                    cmd.append("--fail-scf")
+            else:
+                from .execution_policy import is_real_execution_authorized
+                if not is_real_execution_authorized():
+                    raise PermissionError(
+                        "真实 Gaussian 计算（g16.exe）被安全策略拦截：宿主未开启 GAUSSIAN_ALLOW_REAL_EXECUTION=true 显式物理授权。"
+                        "当前环境仅支持预检检查 (preflight)、dry-run 或模拟测试 (mock_mode=True)。"
+                    )
+                cmd = [settings.gaussian_exe, str(gjf_path), str(log_path)]
+
+            # 构建子进程环境变量，确保 mock_worker 与 Python 依赖在任意工作目录下均可正确导入
+            sub_env = os.environ.copy()
+            repo_root = str(Path(__file__).resolve().parent.parent)
+            existing_pp = sub_env.get("PYTHONPATH", "")
+            sub_env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{existing_pp}" if existing_pp else repo_root
+
             creationflags = 0
             if os.name == "nt":
-                # CREATE_NO_WINDOW；CREATE_NEW_PROCESS_GROUP 只用于与后端控制台解耦，
-                # 注意它不等于 CREATE_BREAKAWAY_FROM_JOB，不能当作脱离 DSH Job Object 的保证。
+                # CREATE_NO_WINDOW；CREATE_NEW_PROCESS_GROUP 只用于与后端控制台解耦
                 creationflags = subprocess.CREATE_NO_WINDOW | 0x00000200
             proc = subprocess.Popen(
                 cmd,
-                cwd=str(settings.work_dir),
+                cwd=str(work_dir),
+                env=sub_env,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                close_fds=True,
                 creationflags=creationflags,
             )
             proc_started = True
             job.pid = proc.pid
-            # B9: best-effort 记录进程创建时间，停止时用于识别 PID 是否被复用
             job.pid_start_time = pid_create_time(proc.pid)
             job.status = "running"
             job.started_at = time.time()
             self._processes[job_id] = proc
-            self._running_jobs[job_id] = job  # R5a: 内存运行态，供当前进程终态回收 lease
-            # R5/R5c: 先落完整 running 记录；失败则写最小 pid 恢复文件；两者都失败须如实标注
+            self._running_jobs[job_id] = job
             try:
                 self._save(job)
                 self._clear_pid_recover(job_id)
@@ -537,7 +652,6 @@ class JobManager:
             return {"ok": True, "job": asdict(job)}
         except Exception as exc:
             if proc_started:
-                # 进程已在运行：保留 lease，绝不释放；即便完整记录写盘失败，也落最小 pid 恢复文件
                 job.status = "running"
                 self._running_jobs[job_id] = job
                 try:
@@ -547,7 +661,6 @@ class JobManager:
                     if not self._write_pid_recover(job):
                         job.error = f"启动后状态与恢复凭据写盘失败（进程仍在运行，重启后可能丢失）：{exc}"
                 return {"ok": True, "job": asdict(job)}
-            # 进程未启动：安全释放 lease，记 failed。
             self._release_lease(job_id)
             job.status = "failed"
             job.error = f"启动失败：{exc}"
@@ -558,12 +671,16 @@ class JobManager:
             return {"ok": False, "error": job.error, "job": asdict(job)}
 
     def get_job(self, job_id: str, log_tail_lines: int = 30) -> Optional[Dict]:
-        """获取任务状态（含实时解析）。"""
+        """获取任务状态（含实时解析与跨进程状态同步）。"""
         # R5a: 先回收已退出的内存运行态任务，再读取
         self._reap_ram_jobs()
         job = self._load(job_id)
-        # R5a: 磁盘主记录写盘失败停在 pending 时，用内存运行态对象返回真实状态
-        if job_id in self._running_jobs:
+        # V5.1: 若磁盘主记录已进入终态（stopped/completed/failed），绝不用本地内存副本覆盖
+        if job and job.status in {"stopped", "completed", "failed"}:
+            self._running_jobs.pop(job_id, None)
+            self._processes.pop(job_id, None)
+        elif job_id in self._running_jobs:
+            # R5a: 磁盘主记录写盘失败停在 pending 时，用内存运行态对象返回真实状态
             job = self._running_jobs[job_id]
         if not job:
             return None
@@ -579,33 +696,55 @@ class JobManager:
                 tail = self._tail_lines(Path(job.log_path), log_tail_lines)
                 job.log_tail = "\n".join(tail)
                 window = "\n".join(tail)
+                if "[MOCK_" in window or "MOCK_WORKER_SIMULATION" in window:
+                    job.is_simulated = True
+                    job.execution_mode = "mock_simulation"
                 # 当前优化步数（尾部窗口内最新值）
                 step_matches = re.findall(r"Optimization cycle\s+(\d+)", window)
                 if step_matches:
                     job.current_step = int(step_matches[-1])
-                # 最新能量（尾部窗口内最新值）
+                # 最新能量（尾部窗口内最新值）：模拟计算严格隔离至 simulated_energy，不得填入 last_energy
                 energy_matches = re.findall(r"SCF Done:\s+E\(\S+\)\s*=\s*(-?[\d.]+)", window)
                 if energy_matches:
-                    job.last_energy = float(energy_matches[-1])
+                    val = float(energy_matches[-1])
+                    if job.is_simulated:
+                        job.simulated_energy = val
+                        job.last_energy = None
+                        if not job.simulation_warning:
+                            job.simulation_warning = (
+                                "MOCK SIMULATION ONLY: Simulated energy is isolated in 'simulated_energy'; "
+                                "'last_energy' is withheld (None)."
+                            )
+                    else:
+                        job.last_energy = val
             except Exception:
                 pass
         else:
             job.log_tail = ""
 
-        return asdict(job)
+        data = asdict(job)
+        data["real_gaussian_result"] = not job.is_simulated
+        return data
 
     def stop_job(self, job_id: str) -> Dict:
-        """停止任务。"""
+        """停止任务（支持跨进程停止与重复终止保护）。"""
         job = self._load(job_id)
-        # R5a: 主记录写盘失败仍停在 pending/pid=None 时，用内存运行态对象接管停止；
-        # 内存对象才是真实的 running+pid 来源。
         ram_job = self._running_jobs.get(job_id)
-        if ram_job is not None:
+        if job and job.status in {"stopped", "completed", "failed"}:
+            self._running_jobs.pop(job_id, None)
+            self._processes.pop(job_id, None)
+        elif ram_job is not None:
+            # R5a: 主记录写盘失败仍停在 pending/pid=None 时，用内存运行态对象接管停止；
+            # 内存对象才是真实的 running+pid 来源。
             job = ram_job
         if not job:
             return {"ok": False, "error": "任务不存在"}
         if job.status != "running":
-            return {"ok": False, "error": f"任务状态为 {job.status}，无法停止"}
+            return {
+                "ok": False,
+                "error": f"任务当前状态为 {job.status}，无法重复停止或终止非运行中任务。",
+                "job": asdict(job),
+            }
 
         # B9: 终止进程树（g16.exe 可能有子进程 l101.exe 等），并复核进程确实消失，
         # 未确认结束不得写入 stopped，避免 taskkill 失败/PID 复用时误报成功。
@@ -666,7 +805,12 @@ class JobManager:
         self._save(job)
         # R5a: 停止成功后同步清理内存跟踪与 recover，避免 get_job 用残留的内存 running
         # 对象覆盖磁盘 stopped 状态、并再次 finalize 成 failed/completed。
-        self._processes.pop(job_id, None)
+        proc = self._processes.pop(job_id, None)
+        if proc:
+            try:
+                proc.wait(timeout=1)
+            except Exception:
+                pass
         self._running_jobs.pop(job_id, None)
         self._clear_pid_recover(job_id)
         return {"ok": True, "job": asdict(job)}

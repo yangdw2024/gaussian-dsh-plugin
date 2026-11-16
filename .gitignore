@@ -17,6 +17,12 @@ runtimes/
 
 # ===== 本地数据与日志 =====
 *.log
+!tests/fixtures/*.log
+*.bak*
+docs/backups_20261026/
+docs/_verify/session_b1bc3e92.jsonl
+docs/_verify/v4_audit/*.log
+docs/_verify/v5*_audit/*.tmp
 .pytest_cache/
 
 # ===== 系统/编辑器 =====

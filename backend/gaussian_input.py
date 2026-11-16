@@ -33,6 +33,7 @@ JOB_TYPE_KEYWORDS = {
     "opt": "opt",
     "freq": "freq",
     "opt+freq": "opt freq",
+    "opt freq": "opt freq",
     "td": "td",
     "irc": "irc",
     "scan": "scan",
@@ -134,6 +135,10 @@ def _build_route(req: GaussianInputRequest) -> Tuple[str, List[str]]:
         warnings.append("纯 freq 任务要求输入结构已是驻点；若非优化后结构，频率结果无意义。")
     if "td" in route_lower and "opt" in route_lower:
         warnings.append("TDDFT 激发态优化（TD opt）计算量大，建议先基态优化再做 TD 单点。")
+    if basis_l in {"gen", "genecp"} and not (req.append_text and req.append_text.strip()):
+        warnings.append("使用 Gen/GenECP 自定义基组时必须在 append_text 附加段内完整提供基组/赝势定义（仅列 BSE 元数据不足以供 Gaussian 读取）。")
+    if "td" in route_lower:
+        warnings.append("TDDFT 计算给出光学垂直激发能，不应直接与基态 KS HOMO-LUMO 轨道能隙混用。")
 
     route = " ".join(parts)
     return route, warnings
@@ -159,11 +164,33 @@ def generate_gjf(req: GaussianInputRequest) -> dict:
 
     from .config import settings
 
+    def _reject_ctrl(val: str, field_name: str) -> str:
+        if any(ch in val for ch in ("\r", "\n", "\0")):
+            raise ValueError(f"输入字段 {field_name} 含非法换行或控制字符，禁止注入 Link0/Route 指令")
+        return val
+
     job_name = _sanitize_name(req.job_name)
-    mem = req.mem or settings.default_mem
-    nproc = req.nproc or settings.default_nproc
-    chk = req.chk or f"{job_name}.chk"
-    title = req.title or f"{req.method}/{req.basis} {req.job_type} for {job_name}"
+    mem = _reject_ctrl(str(req.mem or settings.default_mem).strip(), "mem")
+    if mem.startswith("%") or "#" in mem:
+        raise ValueError("mem 参数格式非法")
+    nproc = req.nproc if req.nproc is not None else settings.default_nproc
+    if not isinstance(nproc, int) or isinstance(nproc, bool) or nproc <= 0:
+        raise ValueError(f"nproc 必须为正整数，当前：{nproc}")
+
+    _reject_ctrl(req.method, "method")
+    _reject_ctrl(req.basis, "basis")
+    if req.custom_route:
+        _reject_ctrl(req.custom_route, "custom_route")
+    for kw in req.extra_keywords or []:
+        _reject_ctrl(str(kw), "extra_keywords")
+
+    raw_chk = req.chk or f"{job_name}.chk"
+    chk = _reject_ctrl(str(raw_chk).strip(), "chk")
+    if ".." in chk or "/" in chk or "\\" in chk or ":" in chk:
+        raise ValueError(f"chk 文件名禁止包含路径分隔符或目录穿越片段：{chk}")
+
+    raw_title = req.title or f"{req.method}/{req.basis} {req.job_type} for {job_name}"
+    title = " ".join(str(raw_title).replace("\0", "").splitlines()).strip() or job_name
 
     lines = []
     # Link 0 — 注意顺序：%nosave 必须在 %chk 之前，否则 Gaussian 会删除 chk 文件
@@ -281,6 +308,11 @@ def validate_gjf(content: str, max_atoms: int = 300, mem_budget_mb: float = 1228
             if nm:
                 val = int(nm.group(1))
                 nproc = val if nproc is None else max(nproc, val)
+            continue
+        if low.startswith("%chk"):
+            chk_val = line.split("=", 1)[1].strip() if "=" in line else ""
+            if ".." in chk_val or "/" in chk_val or "\\" in chk_val:
+                raise ValueError(f"%chk 路径禁止包含目录分隔符或穿越片段：{chk_val}")
             continue
         if line.startswith("%") or line.startswith("#"):
             continue

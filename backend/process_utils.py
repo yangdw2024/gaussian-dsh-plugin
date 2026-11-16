@@ -98,9 +98,11 @@ def spawn_subprocess(
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd) if cwd else None,
+            stdin=subprocess.DEVNULL,
             stdout=stdout_handle,
             stderr=stderr_handle,
             env=env or os.environ.copy(),
+            close_fds=True,
             creationflags=creationflags,
             shell=False,
         )
@@ -118,13 +120,18 @@ def kill_process_tree(pid: int) -> None:
     """终止进程树（包括所有子进程）。
 
     Windows 用 taskkill /F /T /PID，其他平台用 os.kill。
+    禁止传入 <=0 的 PID，防止 POSIX 误杀进程组。
     """
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return
     if os.name == "nt":
         try:
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except Exception:
             try:
@@ -143,17 +150,20 @@ def pid_alive(pid: int) -> bool:
 
     Windows 下 os.kill(pid, 0) 语义不可靠，用 tasklist 精确查询 PID。
     """
-    if not pid or pid <= 0:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
     if os.name == "nt":
         try:
+            import re
             result = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            return str(pid) in result.stdout
+            return bool(re.search(rf"\b{pid}\b", result.stdout or ""))
         except Exception:
             return False
     try:

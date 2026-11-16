@@ -1,0 +1,39 @@
+ Entering Link 1 = C:\G16W\l1.exe PID=     1234.
+ 
+ Copyright (c) 1988-2016, Gaussian, Inc.  All Rights Reserved.
+ 
+ ******************************************
+ Gaussian 16:  ES64W-G16RevA.03  25-Dec-2016
+                10-Nov-2026
+ ******************************************
+ %mem=12GB
+ %nprocshared=8
+ %chk=h2_sp.chk
+ # HF/STO-3G sp
+ 
+ ----------------------------------
+ H2 Single Point Energy Calculation
+ ----------------------------------
+ Charge =  0 Multiplicity = 1
+ 
+ Standard orientation:                         
+ ---------------------------------------------------------------------
+ Center     Atomic      Atomic             Coordinates (Angstroms)
+ Number     Number       Type             X           Y           Z
+ ---------------------------------------------------------------------
+      1          1           0        0.000000    0.000000    0.000000
+      2          1           0        0.000000    0.000000    0.741400
+ ---------------------------------------------------------------------
+ 
+ SCF Done:  E(RHF) =  -1.11750588210     A.U. after    4 cycles
+            NFock=  4  Conv=0.34D-08     -V/T= 2.0084
+ 
+ Alpha  occ. eigenvalues --   -0.57790
+ Alpha virt. eigenvalues --    0.66970
+ 
+ Dipole moment (field-independent basis, Debye):
+    X=     0.0000    Y=     0.0000    Z=     0.0000  Tot=     0.0000
+ 
+ Job cpu time:       0 days  0 hours  0 minutes  1.2 seconds.
+ Elapsed time:       0 days  0 hours  0 minutes  0.8 seconds.
+ Normal termination of Gaussian 16 at Tue Nov 10 20:00:00 2026.

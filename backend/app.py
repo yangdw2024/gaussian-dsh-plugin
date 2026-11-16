@@ -18,8 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .basis_set import basis_set_client
-from .config import settings
-from .gaussian_input import GaussianInputRequest, generate_gjf
+from .config import SERVICE_VERSION, settings
+from .gaussian_input import GaussianInputRequest, generate_gjf, validate_gjf
 from .gaussian_output import output_to_dict, parse_gaussian_log
 from .job_manager import job_manager
 from .keywords import get_all_categories, get_category, search_keywords
@@ -41,7 +41,7 @@ from .sobko_client import sobko_client
 app = FastAPI(
     title="Gaussian DSH Plugin Backend",
     description="辅助 Gaussian 计算的本地后端：输入生成、输出解析、任务管理、基组获取、知识库检索。",
-    version="0.2.0",
+    version=SERVICE_VERSION,
 )
 
 # 实例 ID（启动时生成，用于 health 端点确认服务身份）
@@ -103,7 +103,7 @@ def _on_startup():
     ready = {
         "event": "ready",
         "service": "gaussian-dsh-backend",
-        "version": "0.2.0",
+        "version": SERVICE_VERSION,
         "baseUrl": f"http://{settings.host}:{settings.port}",
         "pid": os.getpid(),
     }
@@ -143,6 +143,14 @@ class SubmitJobRequest(BaseModel):
     gjf_content: str
     mem: Optional[str] = None
     nproc: Optional[int] = None
+    mock_mode: bool = False
+    fail_scf: bool = False
+    mock_duration: float = 0.5
+    dry_run: bool = False
+    integrity_token: Optional[str] = None
+    auth_token: Optional[str] = None
+    human_approval_token: Optional[str] = None
+    preflight_id: Optional[str] = None
 
 
 class SobkoSearchRequest(BaseModel):
@@ -178,7 +186,7 @@ def health():
     return {
         "ok": True,
         "service": "gaussian-dsh-backend",
-        "version": "0.2.0",
+        "version": SERVICE_VERSION,
         "pid": os.getpid(),
         "instance_id": INSTANCE_ID,
         "uptime_seconds": round(time.time() - STARTED_AT, 1),
@@ -202,7 +210,7 @@ def status():
     lease = chem_scheduler.current_lease()
     return {
         "status": "ok",
-        "version": "0.2.0",
+        "version": SERVICE_VERSION,
         "gaussian": {
             "exe": settings.gaussian_exe,
             "exists": gaussian_exists,
@@ -288,6 +296,51 @@ def admin_gc(request: Request, dry_run: bool = False, authorization: Optional[st
     _require_admin(request, authorization)
     from .artifact_gc import sweep
     return {"ok": True, "result": sweep(dry_run=dry_run)}
+
+
+class AdminJobApproveRequest(BaseModel):
+    gjf_path: str = Field(..., description="受控工作目录内待授权的 .gjf 文件路径")
+    preflight_id: str = Field(..., description="预检返回的 preflight_id")
+    expected_sha256: Optional[str] = Field(None, description="待授权文件的预期 SHA-256 摘要")
+    job_name: Optional[str] = Field(None, description="任务名")
+    mem: Optional[str] = Field(None, description="显式申请的内存上限")
+    nproc: Optional[int] = Field(None, description="显式申请的 CPU 核数")
+    approved_by: str = Field("host_admin_operator", description="批准人标识")
+    ttl_seconds: int = Field(600, ge=30, le=3600, description="一次性授权有效期（秒）")
+    save_receipt: bool = Field(True, description="是否保存受信任宿主机授权凭据")
+
+
+@app.post("/v1/admin/jobs/approve")
+def admin_approve_gaussian_job(
+    req: AdminJobApproveRequest,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+):
+    """宿主管理员接口：为精确 SHA-256 与资源上限的 Gaussian 任务签发一次性人工执行授权。
+
+    严格受 _require_admin 鉴权保护，仅供宿主 UI/管理员调用，绝不通过 MCP 暴露给 Agent。
+    """
+    _require_admin(request, authorization)
+    from .execution_policy import authorize_calculation_as_human
+
+    try:
+        return authorize_calculation_as_human(
+            gjf_path=Path(req.gjf_path),
+            preflight_id=req.preflight_id,
+            expected_sha256=req.expected_sha256,
+            job_name=req.job_name,
+            mem=req.mem,
+            nproc=req.nproc,
+            approved_by=req.approved_by,
+            ttl_seconds=req.ttl_seconds,
+            save_receipt=req.save_receipt,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ============ 输入生成 ============
@@ -453,8 +506,9 @@ def api_extract_structure(req: StructureExtractRequest):
     .gjf（Cartesian 坐标）、.out/.log（最后一帧 orientation 坐标）。
     """
     from .structure_reader import extract_smiles_from_file
+    safe_p = _guard_http_read_path(req.file_path)
     try:
-        return extract_smiles_from_file(req.file_path)
+        return extract_smiles_from_file(str(safe_p))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except (ValueError, RuntimeError) as e:
@@ -463,21 +517,54 @@ def api_extract_structure(req: StructureExtractRequest):
 
 # ============ 输出解析 ============
 
+def _guard_http_read_path(raw_path: str) -> Path:
+    """Block approvals secrets, UNC SMB paths, null bytes, and Windows ADS on HTTP read routes."""
+    if "\0" in raw_path:
+        raise HTTPException(status_code=400, detail="非法路径：包含空字节")
+    if raw_path.startswith("\\\\") or raw_path.startswith("//"):
+        raise HTTPException(status_code=403, detail="禁止访问 UNC 或设备路径")
+    colon_check = raw_path[2:] if (len(raw_path) >= 2 and raw_path[1] == ":" and raw_path[0].isalpha()) else raw_path
+    if ":" in colon_check:
+        raise HTTPException(status_code=400, detail="非法路径：禁止访问 NTFS Alternate Data Stream")
+    resolved = Path(raw_path).expanduser().resolve()
+    data_base = (Path(os.environ.get("GAUSSIAN_DATA_DIR") or settings.data_dir)).expanduser().resolve()
+    for restricted in {(data_base / "approvals").resolve(), (settings.data_dir / "approvals").resolve()}:
+        try:
+            resolved.relative_to(restricted)
+            raise HTTPException(status_code=403, detail="禁止通过 HTTP 接口读取人工授权密钥与凭证目录")
+        except ValueError:
+            continue
+    return resolved
+
+
 @app.post("/v1/gaussian-outputs/parse")
 def api_parse_output(req: ParseOutputRequest):
     """解析 Gaussian .log/.out 输出。"""
     content = req.content
     filename = req.filename or "gaussian.log"
+    max_log_mb = int(os.environ.get("GAUSSIAN_MAX_LOG_SIZE_MB", "100"))
+    max_bytes = max_log_mb * 1024 * 1024
 
     if not content and req.file_path:
-        path = Path(req.file_path)
+        path = _guard_http_read_path(req.file_path)
         if not path.exists():
             raise HTTPException(status_code=404, detail=f"文件不存在：{req.file_path}")
+        if path.stat().st_size > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"日志文件过大，超过限制 {max_log_mb} MB（防止 OOM）",
+            )
         content = path.read_text(encoding="utf-8", errors="ignore")
         filename = path.name
 
     if not content:
         raise HTTPException(status_code=400, detail="必须提供 content 或 file_path")
+
+    if len(content.encode("utf-8", errors="ignore")) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"日志文本过大，超过限制 {max_log_mb} MB（防止 OOM）",
+        )
 
     result = parse_gaussian_log(content, filename=filename)
     return output_to_dict(result)
@@ -487,12 +574,70 @@ def api_parse_output(req: ParseOutputRequest):
 
 @app.post("/v1/jobs")
 def api_submit_job(req: SubmitJobRequest):
-    """提交 Gaussian 任务（串行，若有运行中任务则拒绝）。"""
+    """提交 Gaussian 任务（与 MCP 共用跨进程调度锁与三层执行授权校验）。"""
+    try:
+        validate_gjf(req.gjf_content, max_atoms=settings.max_atoms)
+    except ValueError as exc:
+        return {"ok": False, "error": f"GJF 校验未通过：{exc}"}
+
+    use_mock = bool(
+        req.mock_mode
+        or os.environ.get("GAUSSIAN_MOCK_MODE", "").lower() in {"1", "true", "yes"}
+    )
+    if use_mock:
+        return job_manager.submit(
+            job_name=req.job_name,
+            gjf_content=req.gjf_content,
+            mem=req.mem,
+            nproc=req.nproc,
+            mock_mode=True,
+            fail_scf=req.fail_scf,
+            mock_duration=req.mock_duration,
+        )
+
+    from .execution_policy import (
+        evaluate_real_content_authorization,
+        run_preflight_check_content,
+    )
+
+    if req.dry_run:
+        preflight = run_preflight_check_content(
+            content=req.gjf_content,
+            job_name=req.job_name,
+            mem=req.mem,
+            nproc=req.nproc,
+        )
+        return {
+            "ok": bool(preflight.get("preflight_passed")),
+            "dry_run": True,
+            "preflight": preflight,
+        }
+
+    auth_eval = evaluate_real_content_authorization(
+        content=req.gjf_content,
+        integrity_token=req.integrity_token or req.auth_token,
+        human_approval_token=req.human_approval_token,
+        job_name=req.job_name,
+        mem=req.mem,
+        nproc=req.nproc,
+        preflight_id=req.preflight_id,
+        consume_human_token=True,
+    )
+    if not auth_eval.get("ok"):
+        return {
+            "ok": False,
+            "rejected_layer": auth_eval.get("rejected_layer"),
+            "error": auth_eval.get("error"),
+            "authorization_audit": auth_eval.get("authorization_audit"),
+        }
+
     return job_manager.submit(
         job_name=req.job_name,
         gjf_content=req.gjf_content,
         mem=req.mem,
         nproc=req.nproc,
+        mock_mode=False,
+        authorization_summary=auth_eval.get("authorization_audit"),
     )
 
 
@@ -642,10 +787,11 @@ def api_create_postprocess_task(req: PostprocessRequest):
                 postprocess_manager.run_task(tid, request)
             except Exception as e:  # 兜底：run_task 内部已设 failed，这里仅防线程崩溃
                 try:
-                    t = postprocess_manager.get_task(tid)
+                    t = postprocess_manager._load(tid)
                     if t and t.status not in ("completed", "failed"):
                         t.status = "failed"
                         t.error = f"后台执行未捕获异常: {e}"
+                        t.finished_at = time.time()
                         postprocess_manager._save(t)
                 except Exception:
                     pass

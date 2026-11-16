@@ -1,0 +1,99 @@
+{
+  "timestamp": "2026-11-11T02:03:50Z",
+  "client": "Codex CLI",
+  "model": "gpt-5.6-sol",
+  "security_flags": "--approve-for-me --ephemeral",
+  "total_tested": 8,
+  "passed": 8,
+  "pass_rate": "100.0%",
+  "results": [
+    {
+      "index": 1,
+      "tool": "gaussian_status",
+      "status": "PASS",
+      "exit_code": 0,
+      "tool_invoked": true,
+      "duration_seconds": 16.622,
+      "prompt": "Use the gaussian_status tool from gaussian MCP server. Output only a one-line JSON string containing status and gaussian.exists.",
+      "codex_output_preview": "{\"status\":\"ok\",\"gaussian.exists\":true}",
+      "codex_events_preview": "tmp, $TMPDIR]\nreasoning effort: medium\nreasoning summaries: none\nsession id: 01a1c856-12eb-71c3-9927-36e39e2f0770\n--------\nuser\nUse the gaussian_status tool from gaussian MCP server. Output only a one-line JSON string containing status and gaussian.exists.\nmcp: gaussian/gaussian_status started\nmcp: gaussian/gaussian_status (completed)\ncodex\n{\"status\":\"ok\",\"gaussian.exists\":true}\ntokens used\n26,101"
+    },
+    {
+      "index": 2,
+      "tool": "list_gaussian_jobs",
+      "status": "PASS",
+      "exit_code": 0,
+      "tool_invoked": true,
+      "duration_seconds": 16.72,
+      "prompt": "Use the list_gaussian_jobs tool from gaussian MCP server with limit=5. Output only total_jobs and has_active_running_job.",
+      "codex_output_preview": "{\"total_jobs\":32,\"has_active_running_job\":false}",
+      "codex_events_preview": "DIR]\nreasoning effort: medium\nreasoning summaries: none\nsession id: 01a1c856-4f7e-72b1-8ec3-e8cd9001a7cf\n--------\nuser\nUse the list_gaussian_jobs tool from gaussian MCP server with limit=5. Output only total_jobs and has_active_running_job.\nmcp: gaussian/list_gaussian_jobs started\nmcp: gaussian/list_gaussian_jobs (completed)\ncodex\n{\"total_jobs\":32,\"has_active_running_job\":false}\ntokens used\n17,283"
+    },
+    {
+      "index": 3,
+      "tool": "generate_gaussian_input",
+      "status": "PASS",
+      "exit_code": 0,
+      "tool_invoked": true,
+      "duration_seconds": 15.415,
+      "prompt": "Use the generate_gaussian_input tool from gaussian MCP server with job_name='h2_v5_audit', atoms=[['H', 0, 0, 0], ['H', 0, 0, 0.74]], save_to_file=false. Output the filename and atom_count.",
+      "codex_output_preview": "filename: `h2_v5_audit.gjf`  \natom_count: `2`",
+      "codex_events_preview": "put tool from gaussian MCP server with job_name='h2_v5_audit', atoms=[['H', 0, 0, 0], ['H', 0, 0, 0.74]], save_to_file=false. Output the filename and atom_count.\ncodex\n我会直接调用 Gaussian MCP 的 `generate_gaussian_input`，不写入文件，并只返回文件名与原子数。\nmcp: gaussian/generate_gaussian_input started\nmcp: gaussian/generate_gaussian_input (completed)\ncodex\nfilename: `h2_v5_audit.gjf`  \natom_count: `2`\ntokens used\n2,702"
+    },
+    {
+      "index": 4,
+      "tool": "generate_gaussian_input_from_smiles",
+      "status": "PASS",
+      "exit_code": 0,
+      "tool_invoked": true,
+      "duration_seconds": 21.398,
+      "prompt": "Use the generate_gaussian_input_from_smiles tool from gaussian MCP server with smiles='CCO', job_name='v5_ethanol', save_to_file=false. Output atom_count and smiles_info charge.",
+      "codex_output_preview": "```json\n{\n  \"atom_count\": 9,\n  \"charge\": 0\n}\n```",
+      "codex_events_preview": "_gaussian_input_from_smiles tool from gaussian MCP server with smiles='CCO', job_name='v5_ethanol', save_to_file=false. Output atom_count and smiles_info charge.\ncodex\n我会按你给定的参数直接调用 Gaussian MCP 工具，只返回所需字段。\nmcp: gaussian/generate_gaussian_input_from_smiles started\nmcp: gaussian/generate_gaussian_input_from_smiles (completed)\ncodex\n```json\n{\n  \"atom_count\": 9,\n  \"charge\": 0\n}\n```\ntokens used\n26,046"
+    },
+    {
+      "index": 5,
+      "tool": "submit_gaussian_calculation",
+      "status": "PASS",
+      "exit_code": 0,
+      "tool_invoked": true,
+      "duration_seconds": 36.021,
+      "prompt": "Use the submit_gaussian_calculation tool from gaussian MCP server with gjf_path='E:\\\\YDW\\\\ChemDatas\\\\Gjf\\\\lifecycle_tests\\\\h2_test_lifecycle.gjf', dry_run=true. Output ok, dry_run, and preflight status.",
+      "codex_output_preview": "```json\n{\n  \"ok\": true,\n  \"dry_run\": true,\n  \"preflight_status\": \"ready\"\n}\n```",
+      "codex_events_preview": "ecycle.gjf', dry_run=true. Output ok, dry_run, and preflight status.\ncodex\nI’ll run the requested Gaussian submission in dry-run mode and report only `ok`, `dry_run`, and the preflight status.\nmcp: gaussian/submit_gaussian_calculation started\nmcp: gaussian/submit_gaussian_calculation (completed)\ncodex\n```json\n{\n  \"ok\": true,\n  \"dry_run\": true,\n  \"preflight_status\": \"ready\"\n}\n```\ntokens used\n19,074"
+    },
+    {
+      "index": 6,
+      "tool": "get_gaussian_job_status",
+      "status": "PASS",
+      "exit_code": 0,
+      "tool_invoked": true,
+      "duration_seconds": 44.47,
+      "prompt": "Use the list_gaussian_jobs tool first to find a job_id, then call get_gaussian_job_status with that job_id. Output the status and job_id.",
+      "codex_output_preview": "- **job_id:** `b994078f9292`\n- **status:** `completed`",
+      "codex_events_preview": "failed to connect to websocket: IO error: tls handshake eof, url: wss://chatgpt.com/backend-api/codex/responses\nERROR: Reconnecting... 2/5\nmcp: gaussian/list_gaussian_jobs started\nmcp: gaussian/list_gaussian_jobs (completed)\nmcp: gaussian/get_gaussian_job_status started\nmcp: gaussian/get_gaussian_job_status (completed)\ncodex\n- **job_id:** `b994078f9292`\n- **status:** `completed`\ntokens used\n16,068"
+    },
+    {
+      "index": 7,
+      "tool": "diagnose_gaussian_error",
+      "status": "PASS",
+      "exit_code": 0,
+      "tool_invoked": true,
+      "duration_seconds": 15.776,
+      "prompt": "Use the diagnose_gaussian_error tool from gaussian MCP server with error_text='Convergence failure in SCF'. Output the number of diagnoses found and first solution.",
+      "codex_output_preview": "Number of diagnoses: **1**\n\nFirst solution: `scf=xqc scf=(maxcycle=200) guess=read`",
+      "codex_events_preview": "aussian_error tool from gaussian MCP server with error_text='Convergence failure in SCF'. Output the number of diagnoses found and first solution.\ncodex\n我会直接调用 Gaussian MCP 的诊断工具，并只返回诊断数量和第一条解决方案。\nmcp: gaussian/diagnose_gaussian_error started\nmcp: gaussian/diagnose_gaussian_error (completed)\ncodex\nNumber of diagnoses: **1**\n\nFirst solution: `scf=xqc scf=(maxcycle=200) guess=read`\ntokens used\n5,268"
+    },
+    {
+      "index": 8,
+      "tool": "parse_gaussian_output",
+      "status": "PASS",
+      "exit_code": 0,
+      "tool_invoked": true,
+      "duration_seconds": 18.794,
+      "prompt": "Use the parse_gaussian_output tool from gaussian MCP server with content=' Entering Link 1 ... \\n SCF Done:  E(RHF) =  -1.1175 A.U.\\n Normal termination of Gaussian 16\\n'. Output normal_termination and final_energy.",
+      "codex_output_preview": "```json\n{\n  \"normal_termination\": true,\n  \"final_energy\": -1.1175\n}\n```",
+      "codex_events_preview": "\\n SCF Done:  E(RHF) =  -1.1175 A.U.\\n Normal termination of Gaussian 16\\n'. Output normal_termination and final_energy.\ncodex\nI’ll call the requested Gaussian MCP parser and return only the two requested fields.\nmcp: gaussian/parse_gaussian_output started\nmcp: gaussian/parse_gaussian_output (completed)\ncodex\n```json\n{\n  \"normal_termination\": true,\n  \"final_energy\": -1.1175\n}\n```\ntokens used\n1,511"
+    }
+  ]
+}

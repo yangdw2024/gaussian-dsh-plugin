@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 // ============ 后端 HTTP 客户端 ============
 
 const SERVICE_NAME = "gaussian-dsh-backend";
-const SERVICE_VERSION = "0.2.0";
+const SERVICE_VERSION = "0.3.0";
 
 /**
  * R15: 包内 runtime 自定位 exe（对齐 aifs 官方架构）。
@@ -242,7 +242,7 @@ class BackendManager {
     const exe = this._resolveExecutable();
     if (!exe) {
       this.state = "failed";
-      this.error = "未找到 gaussian-backend.exe（runtimes/win32-x64/gaussian-backend/）";
+      this.error = "未找到 gaussian-backend.exe（runtimes/win32-x64/b/ 或 runtime.json executable 路径）";
       return;
     }
     let handle;
@@ -522,19 +522,19 @@ function defineTool(options) {
 
 const GAUSSIAN_GUIDANCE = `## Gaussian 计算助手（gaussian-dsh 插件）
 
-本插件辅助 Gaussian 16 计算，后端运行在本机 http://127.0.0.1:8765。
+本插件辅助 Gaussian 16 计算，后端默认运行在本机 http://127.0.0.1:8765（具体端口与路径可通过环境变量覆盖）。
 
 ### 工作流
-1. **生成输入**：用 generate_gaussian_input 生成 .gjf（自动写入工作目录 E:\\YDW\\ChemDatas\\Gjf）。
-2. **提交任务**：用 submit_gaussian_job 提交（自动串行，禁止并行）。
-3. **监控状态**：用 get_gaussian_job 查看进度（当前优化步、最新能量、log 尾部）。
-4. **解析结果**：任务完成后用 parse_gaussian_output 提取能量、HOMO-LUMO、偶极矩、收敛状态等。
+1. **环境检查**：首次操作先调用 \`gaussian_status\`，获取当前机器实际的 \`work_dir\`、\`data_dir\`、\`gaussian_exe\`、\`default_mem\` 与 \`default_nproc\`。
+2. **生成输入**：用 \`generate_gaussian_input\` 或 \`generate_gaussian_input_from_smiles\` 生成 \`.gjf\`（自动写入受控 \`work_dir\`）。
+3. **提交任务**：用 \`submit_gaussian_job\` 提交（与调度器共享跨进程串行锁，禁止并行重计算）。
+4. **监控状态**：用 \`get_gaussian_job\` 查看进度（当前优化步、最新能量、log 尾部）。
+5. **解析结果**：任务完成后用 \`parse_gaussian_output\` 提取能量、HOMO-LUMO、偶极矩、收敛状态等。
 
-### 硬件约束（用户机器）
-- CPU: AMD Ryzen 7 9700X（8核16线程），默认 nprocshared=8
-- 内存: 15.1 GB，默认 mem=12GB
-- Gaussian 16 Rev A.03，路径 D:\\G16W\\g16.exe
-- 严禁并行多任务，必须串行
+### 硬件与执行约束
+- 默认内存与核数以 \`gaussian_status\` 返回为准（环境变量 \`GAUSSIAN_DEFAULT_MEM\` / \`GAUSSIAN_DEFAULT_NPROC\` 可调）。
+- Gaussian 可执行文件与工作目录可通过 \`GAUSSIAN_EXE\`、\`FORMCHK_EXE\`、\`GAUSSIAN_WORK_DIR\` 覆盖。
+- 严禁并行多任务，重计算（Gaussian / Multiwfn / VMD / RDKit）全局串行。
 
 ### 重要提醒
 - 大体系（>100原子）不要用 opt=calcfc，会内存爆炸
@@ -578,8 +578,8 @@ function buildTools(client) {
       multiplicity: { type: "integer", description: "自旋多重度（闭壳层=1，二重态=2）", default: 1 },
       atoms: { type: "array", description: "原子坐标 [[元素符号, x, y, z], ...]", items: { type: "array" } },
       extra_keywords: { type: "array", description: "额外关键词，如 ['scf=tight','empiricaldispersion=gd3bj','int=ultrafine']", items: { type: "string" } },
-      mem: { type: "string", description: "内存，默认 12GB（不要超过物理内存15GB）" },
-      nproc: { type: "integer", description: "核数，默认 8" },
+      mem: { type: "string", description: "内存，默认由后端配置（如 12GB），请勿超过宿主机可用物理内存" },
+      nproc: { type: "integer", description: "核数，默认由后端配置（如 8）" },
     },
     execute: (args, exec) => client.post("/v1/gaussian-inputs", args, exec.signal),
   }));
@@ -599,7 +599,7 @@ function buildTools(client) {
   // 4. 提交任务
   tools.push(defineTool({
     name: "submit_gaussian_job",
-    description: "提交 Gaussian 计算任务（串行执行：若已有任务在运行则拒绝）。传入 gjf_content，后端写入工作目录并启动 g16.exe。返回 job_id 和任务信息。提交前用 generate_gaussian_input 生成内容。",
+    description: "提交 Gaussian 计算任务（跨进程串行锁 + 三层执行授权边界）。传入 gjf_content，支持 dry_run 预检、mock_mode 模拟验证；真实 g16.exe 计算须具备完整性令牌、人工审批令牌且宿主开启 GAUSSIAN_ALLOW_REAL_EXECUTION=true。提交前用 generate_gaussian_input 生成内容。",
     parameters: {
       job_name: { type: "string", description: "任务名", default: "gaussian_job" },
       gjf_content: { type: "string", description: "完整的 .gjf 文件内容（来自 generate_gaussian_input 的 content 字段）", required: true },
@@ -733,7 +733,7 @@ function buildTools(client) {
   // 16. 创建后处理任务（M3）
   tools.push(defineTool({
     name: "create_postprocess_task",
-    description: "创建后处理任务。kind=orbitals(轨道等值面), esp(静电势表面), rdg(NCI弱相互作用), mo_levels(MO能级图SVG)。输入源三选一：job_id(已有Gaussian任务的chk)、chk_path、fchk_path。注意：orbitals/esp/rdg 在执行器接入前状态为 prepared(仅生成命令)，只有真实产物落盘才会变 completed；mo_levels 直接产出SVG。",
+    description: "创建后处理任务。kind=orbitals(轨道等值面), esp(静电势表面), rdg(NCI弱相互作用), mo_levels(MO能级图SVG)。输入源三选一：job_id(已有Gaussian任务的chk)、chk_path、fchk_path。后端异步调度 Multiwfn 生成 cube 并经网格上限核验后由 VMD 渲染 PNG（mo_levels 直接产出 SVG），请用 get_postprocess_task 轮询完成状态与产物。",
     parameters: {
       kind: { type: "string", description: "任务类型：orbitals / esp / rdg / mo_levels", required: true },
       job_id: { type: "string", description: "已有 Gaussian 任务 ID（从其 chk 后处理）" },
@@ -753,7 +753,7 @@ function buildTools(client) {
   // 17. 查询后处理任务状态（M3: 把任务状态与产物路径映射回工具结果）
   tools.push(defineTool({
     name: "get_postprocess_task",
-    description: "按 task_id 查询后处理任务状态（pending/running/prepared/completed/failed）、错误信息与已生成产物路径；prepared 表示命令已生成但产物尚未落地。",
+    description: "按 task_id 查询后处理任务状态（pending/running/running_multiwfn/rendering_vmd/completed/failed）、错误信息与已生成产物路径。",
     parameters: {
       task_id: { type: "string", description: "后处理任务 ID", required: true },
     },

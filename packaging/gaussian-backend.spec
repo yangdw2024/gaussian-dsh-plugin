@@ -140,6 +140,16 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         "pytest",
+        "unittest",
+        "pydoc",
+        "doctest",
+        "tkinter",
+        "_tkinter",
+        "setuptools",
+        "mcp",
+        "fastmcp",
+        "jsonschema",
+        "jsonschema_specifications",
         "matplotlib",
         "numpy.tests",
         "pandas",
@@ -155,6 +165,22 @@ a = Analysis(
     noarchive=False,
 )
 
+# Windows MAX_PATH=260 防护：裁剪后端运行时完全用不到的超长文档/Contrib/sboms/licenses 数据文件
+def _keep_runtime_data(entry):
+    dest_name = entry[0].replace("\\", "/")
+    blocked_parts = (
+        "rdkit/Contrib/",
+        ".dist-info/licenses/",
+        ".dist-info/sboms/",
+        "jsonschema_specifications/",
+        "setuptools/",
+        "_tcl_data/",
+        "_tk_data/",
+    )
+    return not any(part in dest_name for part in blocked_parts)
+
+a.datas = [d for d in a.datas if _keep_runtime_data(d)]
+
 pyz = PYZ(a.pure)
 
 # onedir 模式：exe 启动器 + _internal 目录（DLL/资源外置），便于排查 RDKit DLL 问题，
@@ -165,6 +191,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="gaussian-backend",
+    contents_directory=".",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

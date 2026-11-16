@@ -1,6 +1,6 @@
 {
-  "name": "@gd/gp",
-  "version": "0.2.0",
+  "name": "@yangdw2024/gp",
+  "version": "0.3.0",
   "type": "module",
   "description": "DSH (DeepSeek Harness) plugin for Gaussian 16: input generation, SMILES-to-3D (RDKit), output parsing, serial job management, BSE basis sets, Multiwfn/VMD post-processing (orbital/ESP/RDG).",
   "main": "./lib/index.js",

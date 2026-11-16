@@ -15,9 +15,9 @@ const anchor = join(profileDir, "package.json");
 const requireAnchor = createRequire(anchor);
 const problems = [];
 
-const pkgName = "@gd/gp";
 const profile = JSON.parse(readFileSync(anchor, "utf8"));
 const bundles = profile.dsh?.profile?.bundles ?? [];
+const pkgName = process.env.DSH_PKG_NAME || (bundles.includes("@yangdw2024/gp") ? "@yangdw2024/gp" : "@gd/gp");
 console.log("profile bundles:", JSON.stringify(bundles, null, 0));
 if (!bundles.includes(pkgName)) {
   problems.push(`${pkgName} 未列入 dsh.profile.bundles，自带 cordis.patch.yml 不会进入 host loader`);
